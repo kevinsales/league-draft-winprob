@@ -45,9 +45,9 @@ ACCOUNT_REGIONS = ["asia", "americas", "europe"]
 # --- Queue & patch ---
 RANKED_SOLO_QUEUE_ID = 420        # match-v5 queue filter
 RANKED_SOLO = "RANKED_SOLO_5x5"   # league-v4 queue name
-# Patch pinning happens once we see which gameVersion values the pulled matches
-# carry (filled in at M2). Restrict to one or two recent patches for one meta.
-TARGET_PATCHES: list[str] = []    # e.g. ["15.13", "15.14"]
+# Patch pinning: restrict to one or two recent patches for a coherent meta.
+# The M1 sample was entirely 16.13; widen this list if a later pull spans patches.
+TARGET_PATCHES: list[str] = ["16.13"]
 
 
 def api_key_or_die() -> str:
