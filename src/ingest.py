@@ -25,10 +25,18 @@ REQUEST_SPACING = 1.2
 
 
 def get(url: str, params: dict | None = None) -> requests.Response:
-    """GET with the API key header and 429/5xx backoff (honors Retry-After)."""
+    """GET with the API key header, retrying on 429/5xx and transient network
+    errors (a long bulk pull will hit the occasional dropped connection)."""
     headers = {"X-Riot-Token": config.api_key_or_die()}
-    for attempt in range(5):
-        resp = requests.get(url, headers=headers, params=params, timeout=15)
+    resp = None
+    for attempt in range(6):
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=15)
+        except requests.exceptions.RequestException as e:
+            wait = 2 * (attempt + 1)  # linear backoff on connection reset/timeout
+            print(f"  ...network error ({type(e).__name__}), waiting {wait}s (attempt {attempt + 1})")
+            time.sleep(wait)
+            continue
         if resp.status_code in (401, 403):
             raise RuntimeError(
                 f"Key rejected ({resp.status_code}). Dev keys expire every 24h -- "
@@ -40,6 +48,8 @@ def get(url: str, params: dict | None = None) -> requests.Response:
             time.sleep(wait)
             continue
         return resp
+    if resp is None:
+        raise RuntimeError(f"Gave up after repeated network errors: {url}")
     return resp
 
 
@@ -120,4 +130,11 @@ def ingest(n_seeds: int = 5, ids_per_seed: int = 20, target_matches: int = 50) -
 
 
 if __name__ == "__main__":
-    ingest()
+    import argparse
+
+    p = argparse.ArgumentParser(description="Pull & cache Master ranked-solo matches.")
+    p.add_argument("--seeds", type=int, default=5, help="number of Master seed players")
+    p.add_argument("--ids-per-seed", type=int, default=20, help="recent match ids per seed")
+    p.add_argument("--target", type=int, default=50, help="max unique matches to fetch")
+    a = p.parse_args()
+    ingest(n_seeds=a.seeds, ids_per_seed=a.ids_per_seed, target_matches=a.target)

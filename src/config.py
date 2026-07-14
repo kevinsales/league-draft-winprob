@@ -46,8 +46,9 @@ ACCOUNT_REGIONS = ["asia", "americas", "europe"]
 RANKED_SOLO_QUEUE_ID = 420        # match-v5 queue filter
 RANKED_SOLO = "RANKED_SOLO_5x5"   # league-v4 queue name
 # Patch pinning: restrict to one or two recent patches for a coherent meta.
-# The M1 sample was entirely 16.13; widen this list if a later pull spans patches.
-TARGET_PATCHES: list[str] = ["16.13"]
+# The 2k pull reached back a few patches; we keep the two most recent (16.13 +
+# 16.12 = ~1.7k matches) and drop 16.11 and older to avoid mixing stale metas.
+TARGET_PATCHES: list[str] = ["16.13", "16.12"]
 
 
 def api_key_or_die() -> str:
