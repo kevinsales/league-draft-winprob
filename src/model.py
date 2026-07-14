@@ -2,16 +2,18 @@
 
 Run (from anywhere):  python src/model.py
 
-M4 baseline: regularized logistic regression on Tier-1 (multi-hot picks + bans),
-evaluated calibration-forward (log-loss, ROC-AUC, Brier, accuracy, calibration
-curve) against two baselines it must beat -- a 50/50 coin flip and a naive
-"sum of champion win-rates" rule.
+  M4 baseline  regularized logistic regression on Tier-1 (multi-hot picks + bans)
+  M5 stronger  LightGBM on Tier-2 (archetype aggregates + blue-minus-red diffs)
 
-Evaluation is out-of-fold cross-validation (StratifiedKFold): with only ~50
-matches a single held-out split is too noisy, so every match gets a prediction
-from a model that never saw it. Baselines are refit on the same folds for a fair
-comparison. There is no outcome leakage -- champ win-rates for the naive baseline
-are computed on training rows only, inside each fold.
+Everything is scored the same way so the comparison is fair: out-of-fold
+StratifiedKFold predictions, with every model's hyperparameters tuned by an
+INNER cross-validation on training rows only (nested CV). No model ever sees the
+rows it is scored on, and the naive baseline's champion win-rates are recomputed
+inside each fold. All features are known at champ-select lock, so there is no
+outcome leakage by construction.
+
+Outputs: a model-comparison table, calibration + feature-importance + win-prob
+spread figures in reports/figures/, and the fitted model saved for predict.py.
 """
 
 import sys
@@ -19,6 +21,8 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")  # headless: save figures, never open a window
+import joblib
+import lightgbm as lgb
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -34,14 +38,13 @@ import features as F  # noqa: E402
 
 N_SPLITS = 5
 RANDOM_STATE = 42
-# Regularization strength is TUNED, not guessed: with ~500 sparse features a fixed
-# C overfits badly (overconfident probabilities -> log-loss worse than a coin flip).
-# An inner CV picks C on training rows only, inside each outer fold -> nested CV,
-# so the reported OOF metrics stay honest.
+
+# Regularization is TUNED, not guessed. With ~500 sparse Tier-1 features a fixed C
+# overfits badly (overconfident probabilities -> log-loss worse than a coin flip).
 C_GRID = np.logspace(-4, 1, 10)
 
 
-def make_model() -> GridSearchCV:
+def make_logreg() -> GridSearchCV:
     return GridSearchCV(
         LogisticRegression(solver="liblinear", max_iter=1000),  # liblinear defaults to L2
         param_grid={"C": C_GRID},
@@ -50,11 +53,29 @@ def make_model() -> GridSearchCV:
     )
 
 
-def champ_winrates(df: pd.DataFrame) -> dict[int, float]:
-    """Per-champion win rate from the *team that picked it*, over train rows only.
+def make_lgbm() -> GridSearchCV:
+    """Deliberately small/shallow trees: the draft signal is weak, so an
+    unconstrained booster would just memorize noise."""
+    return GridSearchCV(
+        lgb.LGBMClassifier(
+            objective="binary", importance_type="gain",
+            random_state=RANDOM_STATE, verbose=-1,
+        ),
+        param_grid={
+            "num_leaves": [4, 8],
+            "learning_rate": [0.02, 0.05],
+            "n_estimators": [200, 400],
+            "min_child_samples": [20, 50],
+            "reg_lambda": [1.0],
+        },
+        scoring="neg_log_loss",
+        cv=5,
+    )
 
-    Blue champs are credited the match label y; red champs are credited (1 - y).
-    """
+
+# ----------------------------------------------------------------- baselines --
+def champ_winrates(df: pd.DataFrame) -> dict[int, float]:
+    """Per-champion win rate credited to the team that picked it (train rows only)."""
     wins: dict[int, float] = {}
     games: dict[int, int] = {}
     for _, r in df.iterrows():
@@ -77,6 +98,7 @@ def naive_scores(df: pd.DataFrame, wr: dict[int, float], base: float) -> np.ndar
     return np.array(out).reshape(-1, 1)
 
 
+# ---------------------------------------------------------------- evaluation --
 def metrics(y: np.ndarray, p: np.ndarray) -> dict:
     p = np.clip(p, 1e-6, 1 - 1e-6)
     return {
@@ -87,94 +109,144 @@ def metrics(y: np.ndarray, p: np.ndarray) -> dict:
     }
 
 
-def out_of_fold(df: pd.DataFrame, X: pd.DataFrame, y: pd.Series):
-    """Return OOF probabilities for the model and the naive baseline."""
-    Xv, yv = X.values, y.values
-    oof_model = np.zeros(len(y))
-    oof_naive = np.zeros(len(y))
-    skf = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_STATE)
-    for tr, te in skf.split(Xv, yv):
-        # main model: inner CV tunes C on this fold's training rows only
-        m = make_model()
-        m.fit(Xv[tr], yv[tr])
-        oof_model[te] = m.predict_proba(Xv[te])[:, 1]
+def oof_probs(factory, X: pd.DataFrame, y: pd.Series, skf) -> np.ndarray:
+    """Out-of-fold probabilities; hyperparameters tuned inside each fold.
 
-        # naive baseline: champ win-rates from this fold's train rows, then a
-        # 1-feature logistic to turn the score into a probability.
+    Keep DataFrames (not .values) end to end so feature names survive into the
+    estimators -- LightGBM warns if it is fitted with names and scored without.
+    """
+    oof = np.zeros(len(y))
+    for tr, te in skf.split(X, y):
+        m = factory()
+        m.fit(X.iloc[tr], y.iloc[tr])
+        oof[te] = m.predict_proba(X.iloc[te])[:, 1]
+    return oof
+
+
+def oof_naive(df: pd.DataFrame, y: pd.Series, skf) -> np.ndarray:
+    """Naive 'sum of champion win-rates' baseline, refit on each fold's train rows."""
+    yv = y.values
+    oof = np.zeros(len(y))
+    for tr, te in skf.split(np.zeros(len(y)), yv):
         tr_df, te_df = df.iloc[tr], df.iloc[te]
         wr = champ_winrates(tr_df)
         base = tr_df["win"].mean()
-        s_tr = naive_scores(tr_df, wr, base)
-        s_te = naive_scores(te_df, wr, base)
-        lr = LogisticRegression(max_iter=1000).fit(s_tr, yv[tr])
-        oof_naive[te] = lr.predict_proba(s_te)[:, 1]
-    return oof_model, oof_naive
+        lr = LogisticRegression(max_iter=1000).fit(naive_scores(tr_df, wr, base), yv[tr])
+        oof[te] = lr.predict_proba(naive_scores(te_df, wr, base))[:, 1]
+    return oof
 
 
-def plot_calibration(y, p, path: Path) -> None:
-    prob_true, prob_pred = calibration_curve(y, np.clip(p, 1e-6, 1 - 1e-6), n_bins=5)
-    fig, ax = plt.subplots(figsize=(5, 5))
+# ------------------------------------------------------------------- figures --
+def plot_calibration(y, curves: dict[str, np.ndarray], path: Path) -> None:
+    fig, ax = plt.subplots(figsize=(5.5, 5.5))
     ax.plot([0, 1], [0, 1], "--", color="gray", label="perfect")
-    ax.plot(prob_pred, prob_true, "o-", label="baseline LR")
+    for name, p in curves.items():
+        prob_true, prob_pred = calibration_curve(y, np.clip(p, 1e-6, 1 - 1e-6), n_bins=10)
+        ax.plot(prob_pred, prob_true, "o-", label=name)
     ax.set_xlabel("predicted win probability")
     ax.set_ylabel("observed win rate")
-    ax.set_title("Baseline calibration (out-of-fold, Tier-1)")
+    ax.set_title("Calibration (out-of-fold)")
     ax.legend()
     fig.tight_layout()
     fig.savefig(path, dpi=120)
     plt.close(fig)
 
 
-def top_coefficients(X: pd.DataFrame, y: pd.Series, labels: pd.DataFrame, k: int = 10):
-    """Fit on all data and surface the champions that most move win probability."""
-    m = make_model()
-    m.fit(X.values, y.values)
-    print(f"\n(final model chose C={m.best_params_['C']:.4g} from the grid)")
-    coef = pd.Series(m.best_estimator_.coef_[0], index=X.columns)
-
-    def label(col: str) -> str:
-        cid = int(col.split("_")[-1])
-        name = labels.loc[cid, "name"] if cid in labels.index else f"id{cid}"
-        return col.replace(str(cid), name)
-
-    coef.index = [label(c) for c in coef.index]
-    ranked = coef.sort_values()
-    return ranked.tail(k)[::-1], ranked.head(k)  # most positive, most negative
+def plot_importance(model, cols, path: Path, k: int = 20) -> None:
+    imp = pd.Series(model.best_estimator_.feature_importances_, index=cols)
+    imp = imp.sort_values().tail(k)
+    fig, ax = plt.subplots(figsize=(7, 6))
+    ax.barh(imp.index, imp.values, color="#4C72B0")
+    ax.set_xlabel("LightGBM importance (gain)")
+    ax.set_title("Tier-2 feature importance (top 20)")
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
 
 
+def plot_winprob_spread(p: np.ndarray, path: Path) -> None:
+    """The headline picture: if draft decided games, these predictions would fan
+    out toward 0 and 1. They don't -- they huddle around the base rate."""
+    fig, ax = plt.subplots(figsize=(6.5, 4))
+    ax.hist(p, bins=40, color="#4C72B0", edgecolor="white")
+    ax.axvline(0.5, ls="--", color="gray", label="coin flip")
+    ax.set_xlim(0, 1)
+    ax.set_xlabel("predicted blue win probability (out-of-fold)")
+    ax.set_ylabel("matches")
+    ax.set_title("How confident can the draft alone make us?")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------- main --
 def main() -> None:
     df = F.load_matches()
     labels = F.load_labels()
-    X, y = F.tier1_features(df)
-    print(f"Baseline on Tier-1: X={X.shape}, blue win rate={y.mean():.1%}, {N_SPLITS}-fold OOF\n")
-
-    oof_model, oof_naive = out_of_fold(df, X, y)
+    X1, y = F.tier1_features(df)
+    X2, _ = F.tier2_features(df, labels)
     yv = y.values
-    # Base rate is an extra, tougher-than-required bar: a constant predictor at the
-    # observed blue win rate. Shown for honesty; the M4 gate is coin flip + naive.
-    results = {
-        "logreg (Tier-1)": metrics(yv, oof_model),
-        "naive champ-WR": metrics(yv, oof_naive),
-        "coin flip (0.5)": metrics(yv, np.full(len(yv), 0.5)),
-        "base rate (const)": metrics(yv, np.full(len(yv), yv.mean())),
+    skf = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_STATE)
+
+    print(f"Matches: {len(df)} | patches {config.TARGET_PATCHES} | blue win rate {y.mean():.1%}")
+    print(f"Tier-1: {X1.shape}  Tier-2: {X2.shape}  ({N_SPLITS}-fold nested OOF)\n")
+
+    oof = {
+        "logreg  Tier-1 (M4)": oof_probs(make_logreg, X1, y, skf),
+        "logreg  Tier-2": oof_probs(make_logreg, X2, y, skf),
+        "LightGBM Tier-2 (M5)": oof_probs(make_lgbm, X2, y, skf),
+        "naive champ-WR": oof_naive(df, y, skf),
+        "coin flip (0.5)": np.full(len(yv), 0.5),
+        "base rate (const)": np.full(len(yv), yv.mean()),
     }
-    table = pd.DataFrame(results).T[["log_loss", "roc_auc", "brier", "accuracy"]]
+    table = pd.DataFrame({k: metrics(yv, p) for k, p in oof.items()}).T
+    table = table[["log_loss", "roc_auc", "brier", "accuracy"]].sort_values("log_loss")
+    print("=== MODEL COMPARISON (out-of-fold, identical folds) ===")
     print(table.to_string(float_format=lambda v: f"{v:.4f}"))
 
-    m_ll = results["logreg (Tier-1)"]["log_loss"]
-    beats = m_ll < results["naive champ-WR"]["log_loss"] and m_ll < results["coin flip (0.5)"]["log_loss"]
-    print(f"\nModel beats BOTH baselines on log-loss: {beats}")
-
-    fig_path = config.FIGURES / "calibration_baseline.png"
+    # ---- figures
     config.FIGURES.mkdir(parents=True, exist_ok=True)
-    plot_calibration(yv, oof_model, fig_path)
-    print(f"Saved calibration curve -> {fig_path.relative_to(config.ROOT)}")
+    plot_calibration(yv, {k: oof[k] for k in ["logreg  Tier-1 (M4)", "LightGBM Tier-2 (M5)"]},
+                     config.FIGURES / "calibration_baseline.png")
+    lgbm_full = make_lgbm()
+    lgbm_full.fit(X2, y)
+    plot_importance(lgbm_full, X2.columns, config.FIGURES / "feature_importance_lgbm.png")
 
-    pos, neg = top_coefficients(X, y, labels)
-    print("\nTop win-contributing features (+ = raises blue win prob):")
-    print(pos.to_string(float_format=lambda v: f"{v:+.3f}"))
-    print("\nTop loss-contributing features (-):")
-    print(neg.to_string(float_format=lambda v: f"{v:+.3f}"))
+    # Pick the best *trained* model (baselines aren't models we can ship).
+    TRAINED = ["logreg  Tier-1 (M4)", "logreg  Tier-2", "LightGBM Tier-2 (M5)"]
+    best_name = min(TRAINED, key=lambda n: metrics(yv, oof[n])["log_loss"])
+    best_probs = oof[best_name]
+
+    plot_winprob_spread(best_probs, config.FIGURES / "winprob_spread.png")
+    print(f"\nFigures -> reports/figures/: calibration_baseline.png, "
+          f"feature_importance_lgbm.png, winprob_spread.png")
+
+    # ---- save the best model for predict.py (M7)
+    if best_name == "LightGBM Tier-2 (M5)":
+        final, cols, tier = lgbm_full, list(X2.columns), "tier2"
+    elif best_name == "logreg  Tier-2":
+        final, cols, tier = make_logreg().fit(X2, y), list(X2.columns), "tier2"
+    else:
+        final, cols, tier = make_logreg().fit(X1, y), list(X1.columns), "tier1"
+    config.DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
+    joblib.dump({"model": final, "columns": cols, "tier": tier},
+                config.DATA_PROCESSED / "model.joblib")
+    print(f"Saved best model ('{best_name.strip()}', {tier}) -> data/processed/model.joblib")
+
+    # ---- headline analysis
+    m = metrics(yv, best_probs)
+    majority = max(yv.mean(), 1 - yv.mean())  # accuracy of always guessing the common side
+    print("\n=== HEADLINE: how much does the draft actually decide? ===")
+    print(f"Best model: {best_name}")
+    print(f"  ROC-AUC   {m['roc_auc']:.3f}  ->  {(m['roc_auc'] - 0.5) * 100:+.1f} pp above chance (0.500)")
+    print(f"  Accuracy  {m['accuracy']:.1%}  ->  {(m['accuracy'] - 0.5) * 100:+.1f} pp above a coin flip")
+    print(f"            {'':13}{(m['accuracy'] - majority) * 100:+.1f} pp above always-guess-the-common-side ({majority:.1%})")
+    print(f"  Log-loss  {m['log_loss']:.4f} vs {metrics(yv, oof['base rate (const)'])['log_loss']:.4f} for a constant predictor")
+    print(f"  Predicted win prob spans {best_probs.min():.1%}-{best_probs.max():.1%} "
+          f"(std {best_probs.std():.3f}) -- draft rarely moves us far from even odds.")
+    print("\n  Read: champion select alone gets us only a few points above chance.")
+    print("  The draft is not what decides a solo-queue game -- execution is.")
 
 
 if __name__ == "__main__":
