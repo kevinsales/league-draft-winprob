@@ -132,6 +132,21 @@ def tier3_features(df: pd.DataFrame, train_idx=None) -> tuple[pd.DataFrame, pd.S
     return X, df["win"]
 
 
+def build_aligned(df: pd.DataFrame, tier: str, columns: list[str],
+                  labels: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Build features for NEW matches, aligned to a trained model's exact columns.
+
+    Champions the model never saw are dropped; columns it expects but this data
+    lacks are filled with 0. Used by my_games.py and predict.py, which must hand
+    the saved model the same column layout it was fitted on.
+    """
+    if tier == "tier1":
+        X, _ = tier1_features(df)
+    else:
+        X, _ = tier2_features(df, labels)
+    return X.reindex(columns=columns, fill_value=0)
+
+
 def main() -> None:
     df = load_matches()
     labels = load_labels()
