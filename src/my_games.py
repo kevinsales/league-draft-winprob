@@ -22,6 +22,7 @@ import matplotlib
 matplotlib.use("Agg")
 import joblib
 import matplotlib.pyplot as plt
+import viz
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -130,23 +131,103 @@ def main(count: int) -> None:
         print(f"  lost while favored:    {int((clean['verdict'] == 'LOST while favored').sum())}")
         print(f"  draft called it right: {(clean['won'] == (clean['my_win_prob'] > 0.5)).mean():.1%} of games")
 
-    # Plot: each game's draft-time probability, colored by what actually happened.
-    fig, ax = plt.subplots(figsize=(9, 4.5))
-    x = range(len(on_patch))
-    colors = ["#2E7D32" if w else "#C62828" for w in on_patch["won"]]
-    ax.bar(x, on_patch["my_win_prob"] - 0.5, bottom=0.5, color=colors, width=0.75)
-    ax.axhline(0.5, color="gray", ls="--", lw=1)
-    ax.set_ylim(0.35, 0.65)
-    ax.set_xlabel("my recent ranked games (most recent first)")
-    ax.set_ylabel("predicted win prob at draft")
-    ax.set_title("My games: what the draft predicted vs. what happened "
-                 "(green = won, red = lost)")
-    fig.tight_layout()
-    out = config.FIGURES / "my_games.png"
-    config.FIGURES.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=120)
-    plt.close(fig)
-    print(f"\nSaved {out.relative_to(config.ROOT)}")
+    viz.apply_style()
+    plot_per_game(on_patch)
+    plot_execution_gap(on_patch)
+    plot_odds_vs_outcome(on_patch)
+    print("\nSaved reports/figures/: my_games.png, my_execution_gap.png, "
+          "my_odds_vs_outcome.png")
+
+
+# ------------------------------------------------------------------- figures --
+def _outcome_colour(won: bool) -> str:
+    return viz.WON if won else viz.LOST
+
+
+def plot_per_game(df: pd.DataFrame):
+    """C1: one labelled row per game -- champion, side, draft-time probability,
+    and the outcome. Lollipop keeps the marks thin and the labels readable."""
+    d = df.iloc[::-1].reset_index(drop=True)  # oldest at top, newest at bottom
+    fig, ax = viz.figure(8.4, 0.52 * len(d) + 2.2)
+    y = range(len(d))
+
+    for i, r in d.iterrows():
+        c = _outcome_colour(r["won"])
+        ax.plot([0.5, r["my_win_prob"]], [i, i], color=c, lw=2.5, solid_capstyle="round",
+                zorder=2)
+        ax.plot(r["my_win_prob"], i, "o", color=c, ms=9, mec=viz.SURFACE, mew=1.5, zorder=3)
+        # Direct label: outcome never depends on colour alone.
+        ax.text(r["my_win_prob"] + (0.004 if r["my_win_prob"] >= 0.5 else -0.004), i,
+                "WON" if r["won"] else "LOST",
+                va="center", ha="left" if r["my_win_prob"] >= 0.5 else "right",
+                fontsize=8.5, color=c, fontweight="semibold")
+
+    ax.set_yticks(list(y))
+    ax.set_yticklabels([f"{r['my_champ']}  ({'blue' if r['my_side'] == BLUE else 'red'})"
+                        for _, r in d.iterrows()], fontsize=9.5)
+    viz.reference_line(ax, 0.5, "coin flip", axis="x")
+    ax.set_xlim(0.40, 0.60)
+    ax.set_xticks([0.40, 0.45, 0.50, 0.55, 0.60])
+    ax.set_xticklabels(["40%", "45%", "50%", "55%", "60%"])
+    ax.set_xlabel("win probability the draft gave me")
+    viz.despine_x(ax)
+    # Inverted (row 0 on top) with headroom so the "coin flip" label can't
+    # collide with the topmost game's outcome label.
+    ax.set_ylim(len(d) - 0.4, -1.1)
+    viz.title_block(ax, "My games: what the draft predicted vs. what happened",
+                    "The draft never gave me better than a coin flip -- yet most of these are wins.")
+    return viz.save(fig, "my_games.png")
+
+
+def plot_execution_gap(df: pd.DataFrame):
+    """C2: the headline -- mean predicted win rate vs what actually happened."""
+    predicted, actual = df["my_win_prob"].mean(), df["won"].mean()
+    fig, ax = viz.figure(7.2, 3.4)
+
+    bars = ax.barh(["what the draft\npredicted", "what actually\nhappened"],
+                   [predicted, actual], color=[viz.BLUE_SIDE, viz.WON], height=0.34)
+    for bar, v in zip(bars, [predicted, actual]):
+        ax.text(v + 0.012, bar.get_y() + bar.get_height() / 2, f"{v:.0%}",
+                va="center", fontsize=13, fontweight="semibold", color=viz.INK)
+
+    viz.reference_line(ax, 0.5, "coin flip", axis="x")
+    ax.set_xlim(0, 1)
+    ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
+    ax.set_xticklabels(["0%", "25%", "50%", "75%", "100%"])
+    ax.set_xlabel(f"win rate over my last {len(df)} on-patch games")
+    viz.despine_x(ax)
+    ax.tick_params(axis="y", labelsize=10)
+    ax.set_ylim(-0.55, 1.7)  # headroom so the "coin flip" label clears the top bar
+    viz.title_block(ax, "The gap between the draft and the result",
+                    "That gap is not champion select. It is execution "
+                    f"(small sample: {len(df)} games).")
+    return viz.save(fig, "my_execution_gap.png")
+
+
+def plot_odds_vs_outcome(df: pd.DataFrame):
+    """C3: wins and losses on the same probability axis. If the draft predicted
+    outcomes, the two rows would separate. They don't."""
+    fig, ax = viz.figure(8.4, 3.2)
+    for won, row in [(True, 1), (False, 0)]:
+        sub = df[df["won"] == won]
+        c = _outcome_colour(won)
+        ax.plot(sub["my_win_prob"], [row] * len(sub), "o", color=c, ms=11,
+                mec=viz.SURFACE, mew=1.5, label=f"{'won' if won else 'lost'} ({len(sub)})",
+                zorder=3)
+
+    viz.reference_line(ax, 0.5, "coin flip", axis="x")
+    ax.set_yticks([0, 1])
+    ax.set_yticklabels(["LOST", "WON"], fontsize=10, fontweight="semibold")
+    ax.set_ylim(-0.6, 1.6)
+    ax.set_xlim(0.40, 0.60)
+    ax.set_xticks([0.40, 0.45, 0.50, 0.55, 0.60])
+    ax.set_xticklabels(["40%", "45%", "50%", "55%", "60%"])
+    ax.set_xlabel("win probability the draft gave me")
+    viz.despine_x(ax)
+    ax.legend(loc="lower right", ncol=2)
+    viz.title_block(ax, "Did a better draft actually mean a win?",
+                    "If it did, the WON dots would sit right of the LOST dots. They overlap.")
+    return viz.save(fig, "my_odds_vs_outcome.png")
 
 
 if __name__ == "__main__":

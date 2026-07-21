@@ -35,6 +35,7 @@ from sklearn.model_selection import GridSearchCV, StratifiedKFold
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 import features as F  # noqa: E402
+import viz  # noqa: E402
 
 N_SPLITS = 5
 RANDOM_STATE = 42
@@ -138,46 +139,75 @@ def oof_naive(df: pd.DataFrame, y: pd.Series, skf) -> np.ndarray:
 
 # ------------------------------------------------------------------- figures --
 def plot_calibration(y, curves: dict[str, np.ndarray], path: Path) -> None:
-    fig, ax = plt.subplots(figsize=(5.5, 5.5))
-    ax.plot([0, 1], [0, 1], "--", color="gray", label="perfect")
-    for name, p in curves.items():
-        prob_true, prob_pred = calibration_curve(y, np.clip(p, 1e-6, 1 - 1e-6), n_bins=10)
-        ax.plot(prob_pred, prob_true, "o-", label=name)
+    fig, ax = viz.figure(5.6, 5.4)
+    ax.plot([0, 1], [0, 1], color=viz.INK_MUTED, lw=1, zorder=1, label="perfect")
+    for name, colour in zip(curves, (viz.BLUE_SIDE, viz.LOST)):
+        prob_true, prob_pred = calibration_curve(y, np.clip(curves[name], 1e-6, 1 - 1e-6),
+                                                 n_bins=10)
+        ax.plot(prob_pred, prob_true, "o-", color=colour, lw=2, ms=6,
+                mec=viz.SURFACE, mew=1.5, label=name.strip(), zorder=3)
     ax.set_xlabel("predicted win probability")
     ax.set_ylabel("observed win rate")
-    ax.set_title("Calibration (out-of-fold)")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(path, dpi=120)
-    plt.close(fig)
+    viz.title_block(ax, "Calibration (out-of-fold)",
+                    "On the line = honest probabilities. Note how little of the axis is used.")
+    ax.legend(loc="upper left")
+    return viz.save(fig, path.name)
 
 
-def plot_importance(model, cols, path: Path, k: int = 20) -> None:
-    imp = pd.Series(model.best_estimator_.feature_importances_, index=cols)
-    imp = imp.sort_values().tail(k)
-    fig, ax = plt.subplots(figsize=(7, 6))
-    ax.barh(imp.index, imp.values, color="#4C72B0")
-    ax.set_xlabel("LightGBM importance (gain)")
-    ax.set_title("Tier-2 feature importance (top 20)")
-    fig.tight_layout()
-    fig.savefig(path, dpi=120)
-    plt.close(fig)
+def plot_champion_coefficients(X: pd.DataFrame, y: pd.Series, labels: pd.DataFrame,
+                               path: Path, k: int = 12):
+    """D4: what the model that ACTUALLY works learned, replacing the LightGBM
+    importance plot (which ranked a below-chance model, i.e. noise).
+
+    Diverging: blue = shifts the game toward blue side, red = toward red side.
+    """
+    m = make_logreg()
+    m.fit(X, y)
+    coef = pd.Series(m.best_estimator_.coef_[0], index=X.columns)
+
+    def pretty(col: str) -> str:
+        cid = int(col.split("_")[-1])
+        name = labels.loc[cid, "name"] if cid in labels.index else f"id{cid}"
+        kind = "ban" if col.startswith("ban") else ("blue pick" if "blue" in col else "red pick")
+        return f"{name}  ({kind})"
+
+    ranked = pd.concat([coef.sort_values().head(k), coef.sort_values().tail(k)])
+    ranked.index = [pretty(c) for c in ranked.index]
+    colours = [viz.RED_SIDE if v < 0 else viz.BLUE_SIDE for v in ranked.values]
+
+    fig, ax = viz.figure(7.6, 7)
+    ax.barh(range(len(ranked)), ranked.values, color=colours, height=0.72)
+    ax.set_yticks(range(len(ranked)))
+    ax.set_yticklabels(ranked.index, fontsize=9)
+    ax.axvline(0, color=viz.BASELINE, lw=1)
+    viz.despine_x(ax)
+    ax.set_xlabel("effect on blue win probability (log-odds)")
+    viz.title_block(ax, "Which picks and bans move the needle?",
+                    f"Strongest {k} each way. Blue favours blue side, red favours red "
+                    "-- but note the scale: every effect is tiny.")
+    return viz.save(fig, path.name)
 
 
-def plot_winprob_spread(p: np.ndarray, path: Path) -> None:
+def plot_winprob_spread(p: np.ndarray, path: Path):
     """The headline picture: if draft decided games, these predictions would fan
     out toward 0 and 1. They don't -- they huddle around the base rate."""
-    fig, ax = plt.subplots(figsize=(6.5, 4))
-    ax.hist(p, bins=40, color="#4C72B0", edgecolor="white")
-    ax.axvline(0.5, ls="--", color="gray", label="coin flip")
+    fig, ax = viz.figure(8, 4.2)
+    ax.hist(p, bins=32, color=viz.BLUE_SIDE, linewidth=0)
+    viz.reference_line(ax, 0.5, "coin flip", axis="x")
     ax.set_xlim(0, 1)
+    ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
+    ax.set_xticklabels(["0%", "25%", "50%", "75%", "100%"])
     ax.set_xlabel("predicted blue win probability (out-of-fold)")
     ax.set_ylabel("matches")
-    ax.set_title("How confident can the draft alone make us?")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(path, dpi=120)
-    plt.close(fig)
+    lo, hi = p.min(), p.max()
+    ax.annotate(f"every prediction lives in here\n{lo:.0%} - {hi:.0%}",
+                xy=((lo + hi) / 2, ax.get_ylim()[1] * 0.72),
+                xytext=(0.78, ax.get_ylim()[1] * 0.8),
+                fontsize=9.5, color=viz.INK_SECONDARY, ha="center",
+                arrowprops=dict(arrowstyle="->", color=viz.INK_MUTED, lw=1))
+    viz.title_block(ax, "How confident can the draft alone make us?",
+                    "A draft that decided games would push predictions toward 0% and 100%.")
+    return viz.save(fig, path.name)
 
 
 # ---------------------------------------------------------------------- main --
@@ -206,12 +236,15 @@ def main() -> None:
     print(table.to_string(float_format=lambda v: f"{v:.4f}"))
 
     # ---- figures
+    viz.apply_style()
     config.FIGURES.mkdir(parents=True, exist_ok=True)
     plot_calibration(yv, {k: oof[k] for k in ["logreg  Tier-1 (M4)", "LightGBM Tier-2 (M5)"]},
                      config.FIGURES / "calibration_baseline.png")
+    # LightGBM is still fitted (it may win and get saved) but we no longer plot its
+    # importances -- it scored below chance, so that ranking was noise.
     lgbm_full = make_lgbm()
     lgbm_full.fit(X2, y)
-    plot_importance(lgbm_full, X2.columns, config.FIGURES / "feature_importance_lgbm.png")
+    plot_champion_coefficients(X1, y, labels, config.FIGURES / "champion_effects.png")
 
     # Pick the best *trained* model (baselines aren't models we can ship).
     TRAINED = ["logreg  Tier-1 (M4)", "logreg  Tier-2", "LightGBM Tier-2 (M5)"]
@@ -220,7 +253,7 @@ def main() -> None:
 
     plot_winprob_spread(best_probs, config.FIGURES / "winprob_spread.png")
     print(f"\nFigures -> reports/figures/: calibration_baseline.png, "
-          f"feature_importance_lgbm.png, winprob_spread.png")
+          f"champion_effects.png, winprob_spread.png")
 
     # ---- save the best model for predict.py (M7)
     if best_name == "LightGBM Tier-2 (M5)":
