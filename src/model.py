@@ -40,6 +40,12 @@ import viz  # noqa: E402
 N_SPLITS = 5
 RANDOM_STATE = 42
 
+# Plain-English names for anything a reader sees on a chart.
+FRIENDLY = {
+    "logreg  Tier-1 (M4)": "our model (champions)",
+    "LightGBM Tier-2 (M5)": "fancier model (did worse)",
+}
+
 # Regularization is TUNED, not guessed. With ~500 sparse Tier-1 features a fixed C
 # overfits badly (overconfident probabilities -> log-loss worse than a coin flip).
 C_GRID = np.logspace(-4, 1, 10)
@@ -145,12 +151,14 @@ def plot_calibration(y, curves: dict[str, np.ndarray], path: Path) -> None:
         prob_true, prob_pred = calibration_curve(y, np.clip(curves[name], 1e-6, 1 - 1e-6),
                                                  n_bins=10)
         ax.plot(prob_pred, prob_true, "o-", color=colour, lw=2, ms=6,
-                mec=viz.SURFACE, mew=1.5, label=name.strip(), zorder=3)
-    ax.set_xlabel("predicted win probability")
-    ax.set_ylabel("observed win rate")
-    viz.title_block(ax, "Calibration (out-of-fold)",
-                    "On the line = honest probabilities. Note how little of the axis is used.")
+                mec=viz.SURFACE, mew=1.5, label=FRIENDLY.get(name.strip(), name.strip()), zorder=3)
+    ax.set_xlabel("win chance the model predicted")
+    ax.set_ylabel("how often that actually happened")
+    viz.title_block(ax, "Are these predictions honest?",
+                    "Dots on the grey line mean the model's stated chance matches reality.")
     ax.legend(loc="upper left")
+    viz.caption(ax, "They sit near the line, so the model is honest -- but look how tiny a "
+                    "slice of the chart it uses. It only ever says 'roughly even'.")
     return viz.save(fig, path.name)
 
 
@@ -168,11 +176,13 @@ def plot_champion_coefficients(X: pd.DataFrame, y: pd.Series, labels: pd.DataFra
     def pretty(col: str) -> str:
         cid = int(col.split("_")[-1])
         name = labels.loc[cid, "name"] if cid in labels.index else f"id{cid}"
-        kind = "ban" if col.startswith("ban") else ("blue pick" if "blue" in col else "red pick")
+        kind = ("banned" if col.startswith("ban")
+                else "on the blue team" if "blue" in col else "on the red team")
         return f"{name}  ({kind})"
 
     ranked = pd.concat([coef.sort_values().head(k), coef.sort_values().tail(k)])
     ranked.index = [pretty(c) for c in ranked.index]
+    ranked = viz.to_points(ranked)  # log-odds -> points of win chance
     colours = [viz.RED_SIDE if v < 0 else viz.BLUE_SIDE for v in ranked.values]
 
     fig, ax = viz.figure(7.6, 7)
@@ -181,10 +191,14 @@ def plot_champion_coefficients(X: pd.DataFrame, y: pd.Series, labels: pd.DataFra
     ax.set_yticklabels(ranked.index, fontsize=9)
     ax.axvline(0, color=viz.BASELINE, lw=1)
     viz.despine_x(ax)
-    ax.set_xlabel("effect on blue win probability (log-odds)")
-    viz.title_block(ax, "Which picks and bans move the needle?",
-                    f"Strongest {k} each way. Blue favours blue side, red favours red "
-                    "-- but note the scale: every effect is tiny.")
+    ax.set_xlabel("shifts the game toward the blue team (percentage points)")
+    ax.xaxis.set_major_formatter(lambda v, _: f"{v:+.1f}")
+    viz.title_block(ax, "Which champions actually change your odds?",
+                    f"The {k} biggest movers each way, across 1,679 Master games.")
+    viz.caption(ax, "A bar to the right means the blue team wins more often when that "
+                    "happens; a bar to the left means the red team does. Either way, read "
+                    "the scale: the biggest mover on this chart is worth under 2 games in "
+                    "100. Champion select is not what wins the game.")
     return viz.save(fig, path.name)
 
 
@@ -197,16 +211,19 @@ def plot_winprob_spread(p: np.ndarray, path: Path):
     ax.set_xlim(0, 1)
     ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
     ax.set_xticklabels(["0%", "25%", "50%", "75%", "100%"])
-    ax.set_xlabel("predicted blue win probability (out-of-fold)")
-    ax.set_ylabel("matches")
+    ax.set_xlabel("win chance the draft gave the blue team")
+    ax.set_ylabel("number of games")
     lo, hi = p.min(), p.max()
     ax.annotate(f"every prediction lives in here\n{lo:.0%} - {hi:.0%}",
                 xy=((lo + hi) / 2, ax.get_ylim()[1] * 0.72),
                 xytext=(0.78, ax.get_ylim()[1] * 0.8),
                 fontsize=9.5, color=viz.INK_SECONDARY, ha="center",
                 arrowprops=dict(arrowstyle="->", color=viz.INK_MUTED, lw=1))
-    viz.title_block(ax, "How confident can the draft alone make us?",
-                    "A draft that decided games would push predictions toward 0% and 100%.")
+    viz.title_block(ax, "The draft almost never picks a winner",
+                    "Each bar counts games. If champion select decided matches, these bars "
+                    "would spread out toward 0% and 100%.")
+    viz.caption(ax, "Instead they pile up on 50/50. After seeing both full drafts, the best "
+                    "guess is still almost a coin flip.")
     return viz.save(fig, path.name)
 
 

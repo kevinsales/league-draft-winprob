@@ -83,9 +83,34 @@ def apply_style() -> None:
     })
 
 
+# Log-odds -> percentage points of win chance.
+# A logistic model's coefficient is in log-odds, which means nothing to a reader.
+# Near an even game (50/50) the sigmoid's slope is 1/4, so a coefficient of b
+# shifts the win chance by about b/4 -- i.e. b * 25 percentage points. Every one
+# of our predictions sits near 50%, so this conversion is accurate here, and it
+# turns "0.067 log-odds" into the far more honest "+1.7 points of win chance".
+PP_PER_LOGODD = 25.0
+
+
+def to_points(log_odds):
+    """Coefficient in log-odds -> percentage points of win chance."""
+    return log_odds * PP_PER_LOGODD
+
+
 def figure(width: float = 8, height: float = 4.5):
     fig, ax = plt.subplots(figsize=(width, height))
     return fig, ax
+
+
+def caption(ax, text: str, width: int = 92) -> None:
+    """A plain-language takeaway printed under the chart -- the sentence you'd
+    say out loud if someone asked 'so what?'. Wraps itself, so callers just pass
+    one plain sentence."""
+    import textwrap
+    ax.annotate(textwrap.fill(text, width), xy=(0, 0), xycoords="axes fraction",
+                xytext=(0, -48), textcoords="offset points",
+                fontsize=9.5, color=INK_SECONDARY, va="top", ha="left",
+                annotation_clip=False)
 
 
 def title_block(ax, title: str, sub: str | None = None) -> None:

@@ -96,11 +96,11 @@ def contributions(blue: list[str], red: list[str], bans: list[str] = ()) -> pd.D
         for raw in names:
             cid = resolve_champion(raw, labels)
             col = f"{side}_pick_{cid}"
-            rows.append({"who": labels.loc[cid, "name"], "kind": f"{side} pick",
+            rows.append({"who": labels.loc[cid, "name"], "kind": f"on the {side} team",
                          "effect": float(coef.get(col, 0.0))})
     for raw in bans:
         cid = resolve_champion(raw, labels)
-        rows.append({"who": labels.loc[cid, "name"], "kind": "ban",
+        rows.append({"who": labels.loc[cid, "name"], "kind": "banned",
                      "effect": float(coef.get(f"ban_{cid}", 0.0))})
     return pd.DataFrame(rows)
 
@@ -142,7 +142,7 @@ def plot_scorecard(blue, red, bans, prob: float, contrib: pd.DataFrame):
               fontweight="bold", va="bottom")
     ax_p.text(1, 0.34, f"{1 - prob:.1%}", color=viz.RED_SIDE, fontsize=20,
               fontweight="bold", va="bottom", ha="right")
-    ax_p.text(0.5, -0.62, "50% = the draft tells you nothing", fontsize=8.5,
+    ax_p.text(0.5, -0.62, "50% would mean the draft tells you nothing", fontsize=8.5,
               color=viz.INK_MUTED, ha="center")
 
     # --- contribution breakdown
@@ -155,19 +155,20 @@ def plot_scorecard(blue, red, bans, prob: float, contrib: pd.DataFrame):
     else:
         c = c.sort_values("effect")
         colours = [viz.RED_SIDE if v < 0 else viz.BLUE_SIDE for v in c["effect"]]
-        ax_c.barh(range(len(c)), c["effect"], color=colours, height=0.7)
+        ax_c.barh(range(len(c)), viz.to_points(c["effect"]), color=colours, height=0.7)
         ax_c.set_yticks(range(len(c)))
         ax_c.set_yticklabels([f"{r.who}  ({r.kind})" for r in c.itertuples()], fontsize=9)
         ax_c.axvline(0, color=viz.BASELINE, lw=1)
         viz.despine_x(ax_c)
-        ax_c.set_xlabel("effect on blue win probability (log-odds)")
+        ax_c.set_xlabel("shifts the game toward the blue team (percentage points)")
+        ax_c.xaxis.set_major_formatter(lambda v, _: f"{v:+.1f}")
     viz.title_block(ax_c, "What moved the needle",
-                    "Blue bars favour blue side, red favour red.")
+                    "Bars to the right help the blue team, bars to the left help the red team.")
 
     fig.text(0.05, 0.945, "Draft win-probability scorecard", fontsize=15,
              fontweight="semibold", color=viz.INK)
     fig.text(0.05, 0.905, f"Master SEA, patches {' + '.join(config.TARGET_PATCHES)}  -  "
-             "draft alone rarely moves a solo-queue game far from a coin flip.",
+             "champion select rarely moves a solo-queue game far from a coin flip.",
              fontsize=9.5, color=viz.INK_SECONDARY)
     return viz.save(fig, "draft_scorecard.png")
 

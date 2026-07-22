@@ -169,13 +169,16 @@ def plot_per_game(df: pd.DataFrame):
     ax.set_xlim(0.40, 0.60)
     ax.set_xticks([0.40, 0.45, 0.50, 0.55, 0.60])
     ax.set_xticklabels(["40%", "45%", "50%", "55%", "60%"])
-    ax.set_xlabel("win probability the draft gave me")
+    ax.set_xlabel("the draft's read on my chances")
     viz.despine_x(ax)
     # Inverted (row 0 on top) with headroom so the "coin flip" label can't
     # collide with the topmost game's outcome label.
     ax.set_ylim(len(d) - 0.4, -1.1)
-    viz.title_block(ax, "My games: what the draft predicted vs. what happened",
-                    "The draft never gave me better than a coin flip -- yet most of these are wins.")
+    viz.title_block(ax, "What the draft said about my games -- and what happened",
+                    "Each line starts at an even 50/50 and stretches to what the draft "
+                    "predicted for me.")
+    viz.caption(ax, "The draft called almost every one of these a coin flip. I won most of "
+                    "them anyway -- that difference came from playing, not picking.")
     return viz.save(fig, "my_games.png")
 
 
@@ -194,13 +197,14 @@ def plot_execution_gap(df: pd.DataFrame):
     ax.set_xlim(0, 1)
     ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
     ax.set_xticklabels(["0%", "25%", "50%", "75%", "100%"])
-    ax.set_xlabel(f"win rate over my last {len(df)} on-patch games")
+    ax.set_xlabel(f"share of my last {len(df)} games won")
     viz.despine_x(ax)
     ax.tick_params(axis="y", labelsize=10)
     ax.set_ylim(-0.55, 1.7)  # headroom so the "coin flip" label clears the top bar
-    viz.title_block(ax, "The gap between the draft and the result",
-                    "That gap is not champion select. It is execution "
-                    f"(small sample: {len(df)} games).")
+    viz.title_block(ax, "The draft said coin flip. I won 8 of 10.",
+                    "What champion select promised me, next to what I actually got.")
+    viz.caption(ax, f"That gap is where the game is really decided. (Only {len(df)} games, so "
+                    "treat the exact number lightly -- the size of the gap is the point.)")
     return viz.save(fig, "my_execution_gap.png")
 
 
@@ -222,11 +226,13 @@ def plot_odds_vs_outcome(df: pd.DataFrame):
     ax.set_xlim(0.40, 0.60)
     ax.set_xticks([0.40, 0.45, 0.50, 0.55, 0.60])
     ax.set_xticklabels(["40%", "45%", "50%", "55%", "60%"])
-    ax.set_xlabel("win probability the draft gave me")
+    ax.set_xlabel("the draft's read on my chances")
     viz.despine_x(ax)
     ax.legend(loc="lower right", ncol=2)
     viz.title_block(ax, "Did a better draft actually mean a win?",
-                    "If it did, the WON dots would sit right of the LOST dots. They overlap.")
+                    "Every game placed by what the draft predicted, split into wins and losses.")
+    viz.caption(ax, "If good drafts won games, the WON row would sit to the right of the LOST "
+                    "row. They sit on top of each other instead.")
     return viz.save(fig, "my_odds_vs_outcome.png")
 
 
