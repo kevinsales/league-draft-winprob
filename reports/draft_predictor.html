@@ -1,0 +1,197 @@
+<meta charset="utf-8">
+<title>Draft Win-Probability Predictor</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface: #fcfcfb; --panel: #ffffff; --ink: #0b0b0b; --ink-2: #52514e;
+    --muted: #898781; --grid: #e1e0d9; --line: #c3c2b7;
+    --blue: #2a78d6; --red: #e34948;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface: #1a1a19; --panel: #232322; --ink: #ffffff; --ink-2: #c3c2b7;
+      --muted: #898781; --grid: #2c2c2a; --line: #383835;
+      --blue: #3987e5; --red: #e66767;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 20px 60px;
+    background: var(--surface); color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .sub { color: var(--ink-2); margin: 0 0 26px; max-width: 70ch; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel); border: 1px solid var(--grid);
+    border-radius: 10px; padding: 16px 18px;
+  }
+  .card h2 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
+             margin: 0 0 12px; color: var(--muted); }
+  .card.blue h2 { color: var(--blue); }
+  .card.red h2 { color: var(--red); }
+  select {
+    width: 100%; margin-bottom: 7px; padding: 7px 9px;
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px;
+    font: inherit; font-size: 14px;
+  }
+  .readout { margin: 26px 0 8px; }
+  .nums { display: flex; justify-content: space-between; align-items: baseline; }
+  .pct { font-size: 40px; font-weight: 700; letter-spacing: -0.02em; }
+  .pct small { font-size: 13px; font-weight: 600; letter-spacing: .06em;
+               text-transform: uppercase; display: block; color: var(--muted); }
+  .bar { display: flex; height: 22px; border-radius: 5px; overflow: hidden;
+         margin-top: 10px; background: var(--grid); position: relative; }
+  .bar i { display: block; height: 100%; }
+  .bar .mid { position: absolute; left: 50%; top: -4px; bottom: -4px; width: 1px;
+              background: var(--ink-2); opacity: .55; }
+  .hint { color: var(--muted); font-size: 12.5px; text-align: center; margin-top: 7px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 13.5px; }
+  th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11.5px;
+       letter-spacing: .06em; text-transform: uppercase; padding: 4px 8px 8px 0; }
+  td { padding: 4px 8px 4px 0; border-top: 1px solid var(--grid); vertical-align: middle; }
+  td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; width: 76px; }
+  .track { position: relative; height: 15px; min-width: 130px; }
+  .track .zero { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--line); }
+  .track i { position: absolute; top: 3px; height: 9px; border-radius: 2px; }
+  .prov { margin-bottom: 22px; }
+  .prov dl { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px;
+             margin: 0; font-size: 13.5px; }
+  .prov dt { color: var(--muted); }
+  .prov dd { margin: 0; color: var(--ink); }
+  .note { color: var(--ink-2); font-size: 13px; margin-top: 22px; max-width: 74ch; }
+  .foot { color: var(--muted); font-size: 12.5px; margin-top: 12px; }
+</style>
+
+<div class="wrap">
+  <h1>Draft win-probability predictor</h1>
+  <p class="sub">Pick both teams and see what champion select alone says about the
+  game, before anyone has moved. Everything runs inside this one file &mdash; no
+  internet, no server.</p>
+
+  <div class="card prov">
+    <h2>Where this data comes from</h2>
+    <dl id="prov"></dl>
+  </div>
+
+  <div class="grid">
+    <div class="card blue"><h2>Blue team</h2><div id="blue"></div></div>
+    <div class="card red"><h2>Red team</h2><div id="red"></div></div>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <h2>Bans (optional)</h2>
+    <div class="grid" id="bans"></div>
+  </div>
+
+  <div class="readout card">
+    <div class="nums">
+      <div class="pct" style="color:var(--blue)"><small>Blue team</small><span id="p-blue">50.0%</span></div>
+      <div class="pct" style="color:var(--red);text-align:right"><small>Red team</small><span id="p-red">50.0%</span></div>
+    </div>
+    <div class="bar"><i id="bar-blue" style="background:var(--blue)"></i><i id="bar-red" style="background:var(--red)"></i><span class="mid"></span></div>
+    <p class="hint">The centre line is 50/50 &mdash; where the draft tells you nothing.</p>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <h2>What moved the needle</h2>
+    <table>
+      <thead><tr><th>Champion</th><th>Where</th><th>Effect</th><th style="width:40%">&nbsp;</th></tr></thead>
+      <tbody id="contrib"></tbody>
+    </table>
+  </div>
+
+  <p class="note"><b>How to read this.</b> Effects are in percentage points of win
+  chance. A positive number means the blue team wins slightly more often when that
+  happens. Notice that even the strongest champion here is worth well under two
+  games in a hundred &mdash; and that the total almost never leaves the 40&ndash;60% band.
+  That is the finding: <b>the draft barely decides a solo-queue game.</b> What you do
+  after champion select matters far more.</p>
+  <p class="foot">Model: regularised logistic regression on champion picks and bans.
+  Not endorsed by Riot Games.</p>
+</div>
+
+<script>
+const DATA = {"intercept": -0.050603899445, "blue": {"1": -0.011446272526, "2": 0.012450853579, "3": 0.001680562778, "4": 0.011406976941, "5": -0.0061390377, "6": -0.002859808877, "7": -0.020639624363, "8": -0.010026193133, "9": -0.00172790297, "10": -0.011967756826, "11": -0.00121792179, "12": -0.01087303187, "13": 0.009201943532, "14": -0.007303459053, "15": 0.003051716929, "16": -0.000118867404, "17": 0.010375416548, "18": -0.002930478938, "19": 0.007453127482, "20": 0.001032327006, "21": 0.003200813174, "22": 0.025121412558, "23": 0.001753392507, "24": 0.014580771982, "25": -0.010445599936, "26": -0.02237036713, "27": -0.010972452169, "28": -0.012065930834, "29": -0.013846439187, "30": 0.008579724628, "31": -0.005815001192, "32": -0.002412987176, "33": 0.000368096127, "34": -0.012017034421, "35": 0.001757385778, "36": 0.000916372888, "37": -0.01735195823, "38": 0.004458795544, "39": -0.023738659657, "40": 0.002398249401, "41": -0.010009076708, "42": 0.003316338326, "43": -0.006261455576, "44": 0.006176604736, "45": -0.016703627733, "48": 0.013739781358, "50": -0.006839067994, "51": -0.042342864724, "53": -0.005937246886, "54": -0.011282343701, "55": -0.001999965824, "56": 0.00024364406, "57": 0.020286610468, "58": -0.000133553723, "59": -0.03056359191, "60": -0.004376365909, "61": 0.000989451805, "62": -0.002909161959, "63": -0.011338450701, "64": -0.006460292842, "67": -0.021541099979, "68": 0.004073391582, "69": 0.000700872592, "72": -0.000949746235, "74": -0.001784139928, "75": 0.036555429695, "76": 0.020480590646, "77": 0.006204851107, "78": 0.015354518988, "79": 6.2869705e-05, "80": 0.014025203364, "81": -0.018761827138, "82": -0.001517763322, "83": 0.005196379136, "84": 0.014116986212, "85": -0.001058911899, "86": 0.005325239399, "89": 0.017481853631, "90": 0.009873170643, "91": -0.012114836564, "92": 0.047220277738, "96": -0.00104070893, "98": 0.008090834205, "99": -0.000387960917, "101": -0.001364281022, "102": 0.006114071313, "103": -0.033439413043, "104": -0.035292153559, "105": 0.025314728947, "106": -0.004111966675, "107": 0.021149483169, "110": 0.008494030131, "111": -0.01250937093, "112": 0.003406717718, "113": -0.002691100885, "114": -0.006242584063, "115": 0.027338639346, "117": -0.014105049394, "119": -0.012522794568, "120": -0.004662302184, "121": 0.003009147812, "122": -0.036135332606, "126": -0.021742547711, "127": 0.010608440422, "131": -0.003789737896, "133": 0.013362953463, "134": -0.029420960535, "136": -0.008808975851, "141": -0.027111135938, "142": 0.006282006351, "143": -0.006095761802, "145": 0.034169902593, "147": 0.005859197841, "150": -0.004343738356, "154": -0.002519494887, "157": -0.047153690327, "161": -0.013376132951, "163": -0.004480170283, "164": 0.01529955071, "166": -0.010720586898, "200": 0.002858719636, "201": -0.011863912314, "202": -0.001930603912, "203": -0.004725795785, "221": -0.012765273964, "222": 0.009118536742, "223": -0.020436639833, "233": -0.010399724082, "234": 0.039537905123, "235": 0.013179340882, "236": -0.055532873898, "238": -0.002625740604, "240": -0.001490158647, "245": 0.001531769843, "246": -0.034193257644, "254": -0.003974199321, "266": 0.009756285165, "267": 0.013420868266, "268": -0.005653170483, "350": 0.003437057174, "360": -0.009793686314, "412": 0.007660926201, "420": -0.007692449922, "421": 0.000299592845, "427": 0.008150459842, "429": 0.005423693127, "432": -0.008298141105, "497": -0.00109720744, "498": 0.005965713521, "516": 0.003972872919, "517": 0.006370574853, "518": 0.003309461472, "523": -0.005876655024, "526": 0.012796643127, "555": 0.02580216073, "711": 0.0107589592, "777": 0.018635170897, "799": -0.015633638499, "800": -0.032385187866, "804": 0.012618965839, "805": -0.005775867398, "875": -0.006476864495, "876": -0.006585024558, "887": 0.007388842823, "888": -0.000469193784, "893": -0.00831803587, "895": -0.003132278806, "897": 0.023102754835, "901": 0.000125557656, "902": -0.004010201989, "904": -0.020006674394, "910": 0.018418403971, "950": 0.012010144288}, "red": {"1": 0.003613244865, "2": 0.015922357113, "3": 0.005113646772, "4": -0.019363103284, "5": -0.004673988065, "6": -0.004028989659, "7": 0.015021639693, "8": 0.006824234097, "9": 0.009712487242, "10": -0.022847901807, "11": -0.036487236288, "12": -0.017997285907, "13": 0.000628344321, "14": -0.01192845072, "15": -0.006910312089, "16": -0.002760864068, "17": 0.002638229917, "18": 0.011628692476, "19": -0.021498841236, "20": 0.013771212105, "21": -0.003350175745, "22": 0.011608401375, "23": 0.000346644059, "24": -0.013051094962, "25": -0.002291925562, "26": -0.002450935912, "27": 0.002950917215, "28": 0.004334975726, "29": -0.012815106115, "30": -0.004818320962, "31": -0.013240595336, "32": 0.004855990562, "33": -0.008060408487, "34": -0.006934111234, "35": -0.004287969203, "36": 0.003761357992, "37": -0.002937727185, "38": -0.013117973916, "39": 0.009639104742, "40": -0.023498220176, "41": 0.018551162231, "42": 0.000904370898, "43": -0.000632578468, "44": 0.007625486577, "45": -0.007098112452, "48": -0.000294668114, "50": 0.00720525489, "51": 0.066830059669, "53": 0.000330913431, "54": 0.001802456349, "55": -0.017650013453, "56": 0.021546620658, "57": -0.000404124379, "58": 0.014911001903, "59": -0.037245311761, "60": -0.003529300083, "61": -0.003044121394, "62": -0.005834851321, "63": -0.017020920742, "64": 0.01883147077, "67": -0.005491776872, "68": -0.011086365997, "69": -3.566882e-06, "72": -0.007735002634, "74": -0.001336664252, "75": 0.009794395125, "76": 0.014479988757, "77": -0.016444133995, "78": 0.010676762418, "79": 0.000656375476, "80": -0.001609061044, "81": 0.029303192171, "82": 0.005132421403, "83": -0.009824312175, "84": -0.003799853426, "85": 0.003686216248, "86": -0.009005639302, "89": 0.007798736967, "90": -0.035926009392, "91": -0.009967734153, "92": -0.008500188565, "96": 0.001539008659, "98": -0.000843044362, "99": -0.001147374126, "101": 0.029587703185, "102": 0.005986372069, "103": -0.028665053723, "104": 0.007800924344, "105": 0.000796698157, "106": -0.013395288299, "107": 0.007546427277, "110": -0.003703283551, "111": -0.02521458297, "112": -0.008886823398, "113": 0.005346033127, "114": 0.017442979834, "115": 0.023622979853, "117": 0.017472145424, "119": -0.014469829992, "120": -0.012683483972, "121": -0.027304846743, "122": 0.036320291071, "126": -0.005488015547, "127": 0.013237479391, "131": -0.006836581978, "133": 0.010983741831, "134": -0.024246706025, "136": 0.032797132239, "141": -0.00553347846, "142": 0.010662214172, "143": -0.00744424739, "145": -0.033179145407, "147": -0.014060459566, "150": 0.010148145321, "154": 0.009473984748, "157": 0.028025247244, "161": -0.011425745096, "163": 0.013338359553, "164": 0.0066669515, "166": 0.017295817596, "200": -0.004797659082, "201": 0.022225887244, "202": 0.006262092521, "203": 0.000282332726, "221": 0.000707453114, "222": -0.016616287922, "223": 0.010233528099, "233": -0.01686202129, "234": 0.010783140494, "235": -0.049891115283, "236": -0.042789436752, "238": 0.011042067654, "240": 0.004102582457, "245": 0.006450533389, "246": -0.004441502287, "254": -0.00116416347, "266": -0.003821761359, "267": 0.008113684163, "268": 0.01045857473, "350": -0.036707966852, "360": 0.011337689938, "412": -0.002074348881, "420": 0.006152547407, "421": -0.002518273341, "427": -0.002613442761, "429": -0.03065445176, "432": -0.001853045773, "497": 0.022779740162, "498": -0.01286874453, "516": -0.001756139649, "517": -0.052525902547, "518": -0.011330059803, "523": 0.013975141493, "526": -0.00537316937, "555": -0.016503542742, "711": -0.01246406443, "777": -0.007851718292, "799": 0.000889933496, "800": 0.029146441036, "804": 0.010604586874, "805": -0.012636847225, "875": 0.001236613383, "876": 0.012104043439, "887": -0.012090991665, "888": 0.009406766187, "893": -0.016872151178, "895": -0.001353934785, "897": -0.00108973149, "901": 0.006522025823, "902": -0.038346657886, "904": -0.003520974468, "910": -0.013868429869, "950": 0.01825647026}, "ban": {"1": -0.000194535833, "2": -0.002162762723, "3": -0.012467637585, "4": -0.00295602222, "5": 0.000475483305, "6": 0.003121980484, "7": 0.001284196005, "8": 0.000776000617, "9": -0.005358393349, "10": 0.001781531077, "11": 0.025527544865, "12": 0.012403227804, "13": -0.00048003061, "14": 0.0014573793, "15": 0.00983198418, "16": -0.026219538642, "17": -0.024627939155, "18": 0.008282406357, "19": -0.003320398195, "20": -0.011167118159, "21": 0.00480914058, "22": 0.007293964733, "23": -0.010700816757, "24": -0.05617197291, "25": -0.017900218992, "26": 0.000949265517, "27": -0.004529486193, "28": -0.010103501479, "29": -0.01251406772, "30": -0.010116513505, "31": -0.005215054672, "32": 0.025164224919, "33": -0.016400836436, "34": 0.008511725344, "35": 0.022074178318, "36": -0.001417788346, "37": 0.002680428456, "38": -0.011129968, "39": 0.030311068785, "40": -0.0006807371, "41": 0.007952466514, "42": 0.004811816867, "43": -0.002464446011, "44": -0.003437926766, "45": -0.003887467776, "48": -0.006385239245, "50": 0.013146581548, "51": -0.008027149052, "53": -0.010098513886, "54": -0.036819912229, "55": 0.024356169064, "56": -0.029966710688, "57": -0.004252640872, "58": 0.019907545328, "59": -0.013745079739, "60": -0.00093017797, "61": -0.010600467457, "62": -0.023236794598, "63": 0.017005738806, "64": -0.040916055551, "67": -0.026935651002, "68": 0.005713252452, "69": 0.000176918255, "72": -0.002084785074, "74": 0.003313619485, "75": -0.008254344679, "76": 0.009604290012, "77": -0.006080415198, "78": -0.004486777519, "79": -0.01272023104, "80": 0.003708555307, "81": -0.034926815941, "82": -0.02225893336, "83": -0.001581125604, "84": 0.003549791584, "85": 0.00490487068, "86": -0.030614491186, "89": 0.006530460385, "90": -0.019499647506, "91": -0.02192401379, "92": -0.01206355272, "96": -0.002066437935, "98": -0.003079411336, "99": -0.000941287929, "101": -0.009231602183, "102": 0.00281303357, "103": 0.024932677357, "104": -0.049587404679, "105": -0.02062781231, "106": -0.005738241481, "107": -0.027559355366, "110": -0.021449726045, "111": 0.009818642671, "112": -0.017087595529, "113": -0.004438537883, "114": -0.00587937195, "115": -0.018194994156, "117": 0.022704965517, "119": 0.005307562395, "120": -0.01722899198, "121": -0.020021293957, "122": -0.017621798237, "126": 0.008416178058, "127": -0.030085220137, "131": -0.023915760632, "133": -0.007238324955, "134": 0.023761162468, "136": -0.001373417214, "141": -0.004420925168, "142": -0.030726366585, "143": 0.002442000423, "145": -0.009765441568, "147": 0.03057038372, "150": -0.003976230836, "154": 0.005790545153, "157": 0.00659196575, "161": 0.025999882792, "163": -0.001809141885, "164": 0.031010011471, "166": 0.004174567242, "200": 0.000116461671, "201": 0.016394409532, "202": 0.001092336038, "203": 0.026824459343, "221": -0.00199079945, "222": -0.005670990866, "223": 0.000129771418, "233": 0.010530111196, "234": 0.016069155987, "235": 0.007989638999, "236": -0.000537860207, "238": 0.01626513058, "240": -0.011279928755, "245": 0.007852486197, "246": -0.006699572835, "254": 0.007400022575, "266": -0.036675772257, "267": -0.002779666847, "268": -0.01436629066, "350": 0.047695341657, "360": -0.001229475395, "412": -0.032115399556, "420": 0.020778604699, "421": 0.00493215083, "427": -0.009683144966, "429": 0.005579913937, "432": 0.03458532559, "497": 0.000419912422, "498": 0.003428126293, "516": -0.009922048096, "517": 0.020639242046, "518": -0.002287531871, "523": 0.001864389119, "526": -0.005028392218, "555": -0.005636636317, "711": 0.016399157945, "777": -0.001407379984, "799": -0.015453043414, "800": -0.042194200135, "804": -0.000503114184, "805": 0.000500684803, "875": -0.004848932897, "876": -0.012057420149, "887": 0.001810475179, "888": 0.005426994804, "893": 0.017241863553, "895": 0.000996747197, "897": -0.011550964725, "901": -0.002936249338, "902": 2.524677e-06, "904": 0.02225434735, "910": -0.008227090257, "950": 0.007997399754}, "champions": [{"id": 266, "name": "Aatrox"}, {"id": 103, "name": "Ahri"}, {"id": 84, "name": "Akali"}, {"id": 166, "name": "Akshan"}, {"id": 12, "name": "Alistar"}, {"id": 799, "name": "Ambessa"}, {"id": 32, "name": "Amumu"}, {"id": 34, "name": "Anivia"}, {"id": 1, "name": "Annie"}, {"id": 523, "name": "Aphelios"}, {"id": 22, "name": "Ashe"}, {"id": 136, "name": "Aurelion Sol"}, {"id": 893, "name": "Aurora"}, {"id": 268, "name": "Azir"}, {"id": 432, "name": "Bard"}, {"id": 200, "name": "Bel'Veth"}, {"id": 53, "name": "Blitzcrank"}, {"id": 63, "name": "Brand"}, {"id": 201, "name": "Braum"}, {"id": 233, "name": "Briar"}, {"id": 51, "name": "Caitlyn"}, {"id": 164, "name": "Camille"}, {"id": 69, "name": "Cassiopeia"}, {"id": 31, "name": "Cho'Gath"}, {"id": 42, "name": "Corki"}, {"id": 122, "name": "Darius"}, {"id": 131, "name": "Diana"}, {"id": 36, "name": "Dr. Mundo"}, {"id": 119, "name": "Draven"}, {"id": 245, "name": "Ekko"}, {"id": 60, "name": "Elise"}, {"id": 28, "name": "Evelynn"}, {"id": 81, "name": "Ezreal"}, {"id": 9, "name": "Fiddlesticks"}, {"id": 114, "name": "Fiora"}, {"id": 105, "name": "Fizz"}, {"id": 3, "name": "Galio"}, {"id": 41, "name": "Gangplank"}, {"id": 86, "name": "Garen"}, {"id": 150, "name": "Gnar"}, {"id": 79, "name": "Gragas"}, {"id": 104, "name": "Graves"}, {"id": 887, "name": "Gwen"}, {"id": 120, "name": "Hecarim"}, {"id": 74, "name": "Heimerdinger"}, {"id": 910, "name": "Hwei"}, {"id": 420, "name": "Illaoi"}, {"id": 39, "name": "Irelia"}, {"id": 427, "name": "Ivern"}, {"id": 40, "name": "Janna"}, {"id": 59, "name": "Jarvan IV"}, {"id": 24, "name": "Jax"}, {"id": 126, "name": "Jayce"}, {"id": 202, "name": "Jhin"}, {"id": 222, "name": "Jinx"}, {"id": 897, "name": "K'Sante"}, {"id": 145, "name": "Kai'Sa"}, {"id": 429, "name": "Kalista"}, {"id": 43, "name": "Karma"}, {"id": 30, "name": "Karthus"}, {"id": 38, "name": "Kassadin"}, {"id": 55, "name": "Katarina"}, {"id": 10, "name": "Kayle"}, {"id": 141, "name": "Kayn"}, {"id": 85, "name": "Kennen"}, {"id": 121, "name": "Kha'Zix"}, {"id": 203, "name": "Kindred"}, {"id": 240, "name": "Kled"}, {"id": 96, "name": "Kog'Maw"}, {"id": 7, "name": "LeBlanc"}, {"id": 64, "name": "Lee Sin"}, {"id": 89, "name": "Leona"}, {"id": 876, "name": "Lillia"}, {"id": 127, "name": "Lissandra"}, {"id": 805, "name": "Locke"}, {"id": 236, "name": "Lucian"}, {"id": 117, "name": "Lulu"}, {"id": 99, "name": "Lux"}, {"id": 54, "name": "Malphite"}, {"id": 90, "name": "Malzahar"}, {"id": 57, "name": "Maokai"}, {"id": 11, "name": "Master Yi"}, {"id": 800, "name": "Mel"}, {"id": 902, "name": "Milio"}, {"id": 21, "name": "Miss Fortune"}, {"id": 82, "name": "Mordekaiser"}, {"id": 25, "name": "Morgana"}, {"id": 950, "name": "Naafiri"}, {"id": 267, "name": "Nami"}, {"id": 75, "name": "Nasus"}, {"id": 111, "name": "Nautilus"}, {"id": 518, "name": "Neeko"}, {"id": 76, "name": "Nidalee"}, {"id": 895, "name": "Nilah"}, {"id": 56, "name": "Nocturne"}, {"id": 20, "name": "Nunu & Willump"}, {"id": 2, "name": "Olaf"}, {"id": 61, "name": "Orianna"}, {"id": 516, "name": "Ornn"}, {"id": 80, "name": "Pantheon"}, {"id": 78, "name": "Poppy"}, {"id": 555, "name": "Pyke"}, {"id": 246, "name": "Qiyana"}, {"id": 133, "name": "Quinn"}, {"id": 497, "name": "Rakan"}, {"id": 33, "name": "Rammus"}, {"id": 421, "name": "Rek'Sai"}, {"id": 526, "name": "Rell"}, {"id": 888, "name": "Renata Glasc"}, {"id": 58, "name": "Renekton"}, {"id": 107, "name": "Rengar"}, {"id": 92, "name": "Riven"}, {"id": 68, "name": "Rumble"}, {"id": 13, "name": "Ryze"}, {"id": 360, "name": "Samira"}, {"id": 113, "name": "Sejuani"}, {"id": 235, "name": "Senna"}, {"id": 147, "name": "Seraphine"}, {"id": 875, "name": "Sett"}, {"id": 35, "name": "Shaco"}, {"id": 98, "name": "Shen"}, {"id": 102, "name": "Shyvana"}, {"id": 27, "name": "Singed"}, {"id": 14, "name": "Sion"}, {"id": 15, "name": "Sivir"}, {"id": 72, "name": "Skarner"}, {"id": 901, "name": "Smolder"}, {"id": 37, "name": "Sona"}, {"id": 16, "name": "Soraka"}, {"id": 50, "name": "Swain"}, {"id": 517, "name": "Sylas"}, {"id": 134, "name": "Syndra"}, {"id": 223, "name": "Tahm Kench"}, {"id": 163, "name": "Taliyah"}, {"id": 91, "name": "Talon"}, {"id": 44, "name": "Taric"}, {"id": 17, "name": "Teemo"}, {"id": 412, "name": "Thresh"}, {"id": 18, "name": "Tristana"}, {"id": 48, "name": "Trundle"}, {"id": 23, "name": "Tryndamere"}, {"id": 4, "name": "Twisted Fate"}, {"id": 29, "name": "Twitch"}, {"id": 77, "name": "Udyr"}, {"id": 6, "name": "Urgot"}, {"id": 110, "name": "Varus"}, {"id": 67, "name": "Vayne"}, {"id": 45, "name": "Veigar"}, {"id": 161, "name": "Vel'Koz"}, {"id": 711, "name": "Vex"}, {"id": 254, "name": "Vi"}, {"id": 234, "name": "Viego"}, {"id": 112, "name": "Viktor"}, {"id": 8, "name": "Vladimir"}, {"id": 106, "name": "Volibear"}, {"id": 19, "name": "Warwick"}, {"id": 62, "name": "Wukong"}, {"id": 498, "name": "Xayah"}, {"id": 101, "name": "Xerath"}, {"id": 5, "name": "Xin Zhao"}, {"id": 157, "name": "Yasuo"}, {"id": 777, "name": "Yone"}, {"id": 83, "name": "Yorick"}, {"id": 804, "name": "Yunara"}, {"id": 350, "name": "Yuumi"}, {"id": 904, "name": "Zaahen"}, {"id": 154, "name": "Zac"}, {"id": 238, "name": "Zed"}, {"id": 221, "name": "Zeri"}, {"id": 115, "name": "Ziggs"}, {"id": 26, "name": "Zilean"}, {"id": 142, "name": "Zoe"}, {"id": 143, "name": "Zyra"}], "meta": {"patches": "16.13 + 16.12", "games": 1689, "region": "SEA (South-East Asia)", "platform": "sg2 - Singapore", "queue": "Ranked Solo/Duo (420)", "tiers": {"UNKNOWN": 1689}, "from": "10 Jun 2026", "to": "14 Jul 2026"}};
+const PP = 25;            // log-odds -> percentage points, near an even game
+const DEFAULT_BLUE = ["Aatrox", "Vi", "Ahri", "Jinx", "Thresh"];
+const DEFAULT_RED  = ["Garen", "Lee Sin", "Orianna", "Caitlyn", "Leona"];
+
+const byName = {};
+DATA.champions.forEach(c => byName[c.name] = c.id);
+
+function makeSelect(container, cls, i, preset) {
+  const s = document.createElement("select");
+  s.className = cls;
+  s.innerHTML = '<option value="">-- none --</option>' +
+    DATA.champions.map(c => `<option value="${c.id}">${c.name}</option>`).join("");
+  if (preset) s.value = byName[preset];
+  s.addEventListener("change", update);
+  container.appendChild(s);
+}
+
+const blueBox = document.getElementById("blue"), redBox = document.getElementById("red");
+for (let i = 0; i < 5; i++) makeSelect(blueBox, "pick-blue", i, DEFAULT_BLUE[i]);
+for (let i = 0; i < 5; i++) makeSelect(redBox, "pick-red", i, DEFAULT_RED[i]);
+const banBox = document.getElementById("bans");
+for (let i = 0; i < 10; i++) makeSelect(banBox, "ban", i, null);
+
+const M = DATA.meta;
+const tierLine = Object.entries(M.tiers || {})
+  .sort((a, b) => b[1] - a[1])
+  .map(([t, n]) => `${t.charAt(0) + t.slice(1).toLowerCase()} ${n.toLocaleString()}`)
+  .join(" &middot; ") || "-";
+document.getElementById("prov").innerHTML = [
+  ["Server",   `${M.region} &mdash; platform <code>${M.platform}</code>`],
+  ["Queue",    M.queue],
+  ["Ranks",    tierLine + '<br><span style="color:var(--muted)">tier is the rank of the '
+               + 'player whose history surfaced the game, so it is approximate</span>'],
+  ["Patches",  M.patches],
+  ["Games",    `<b>${M.games.toLocaleString()}</b> matches`
+               + (M.from ? `, played ${M.from} &ndash; ${M.to}` : "")],
+].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+
+const vals = cls => [...document.querySelectorAll("." + cls)]
+  .map(s => s.value).filter(v => v !== "").map(Number);
+const nameOf = id => (DATA.champions.find(c => c.id === id) || {name: "?"}).name;
+
+function update() {
+  const blue = vals("pick-blue"), red = vals("pick-red"), bans = vals("ban");
+
+  // Same arithmetic scikit-learn does: intercept + active coefficients.
+  let logit = DATA.intercept;
+  const rows = [];
+  blue.forEach(id => { const c = DATA.blue[id] || 0; logit += c;
+                       rows.push([nameOf(id), "on the blue team", c]); });
+  red.forEach(id  => { const c = DATA.red[id]  || 0; logit += c;
+                       rows.push([nameOf(id), "on the red team", c]); });
+  bans.forEach(id => { const c = DATA.ban[id]  || 0; logit += c;
+                       rows.push([nameOf(id), "banned", c]); });
+
+  const p = 1 / (1 + Math.exp(-logit));
+  document.getElementById("p-blue").textContent = (p * 100).toFixed(1) + "%";
+  document.getElementById("p-red").textContent = ((1 - p) * 100).toFixed(1) + "%";
+  document.getElementById("bar-blue").style.width = (p * 100) + "%";
+  document.getElementById("bar-red").style.width = ((1 - p) * 100) + "%";
+
+  rows.sort((a, b) => b[2] - a[2]);
+  const max = Math.max(0.0001, ...rows.map(r => Math.abs(r[2] * PP)));
+  document.getElementById("contrib").innerHTML = rows.map(([who, where, c]) => {
+    const pp = c * PP;
+    const w = Math.abs(pp) / max * 48;                       // % of the track
+    const colour = pp >= 0 ? "var(--blue)" : "var(--red)";
+    const pos = pp >= 0 ? `left:50%;width:${w}%` : `right:50%;width:${w}%`;
+    const shown = c === 0 ? "n/a" : (pp >= 0 ? "+" : "") + pp.toFixed(2);
+    return `<tr><td>${who}</td><td style="color:var(--ink-2)">${where}</td>
+      <td class="n">${shown}</td>
+      <td><div class="track"><span class="zero"></span>
+      <i style="${pos};background:${colour}"></i></div></td></tr>`;
+  }).join("");
+}
+update();
+</script>

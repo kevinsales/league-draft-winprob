@@ -53,6 +53,8 @@ def parse_match(path: Path) -> dict | None:
         "matchId": info.get("gameId"),
         "patch": patch_of(info["gameVersion"]),
         "gameVersion": info["gameVersion"],
+        # ms epoch -- kept so we can state the date range the data covers.
+        "gameCreation": info.get("gameCreation"),
         "win": int(bool(teams[BLUE]["win"])),  # 1 = blue (team 100) win
     }
     row.update({f"blue{i}": c for i, c in enumerate(blue, 1)})
@@ -81,11 +83,32 @@ def build_dataframe() -> pd.DataFrame:
     before = len(df)
     df = df.drop_duplicates(subset="matchId").reset_index(drop=True)
 
+    # Attach the tier of the seed player who surfaced each match (approximate --
+    # match-v5 has no game-tier field). Written by ingest.py.
+    tiers_path = config.DATA_PROCESSED / "seed_tiers.csv"
+    if tiers_path.exists():
+        tiers = pd.read_csv(tiers_path)
+        df = df.merge(tiers, on="matchId", how="left")
+        df["seed_tier"] = df["seed_tier"].fillna("UNKNOWN")
+    else:
+        df["seed_tier"] = "UNKNOWN"
+
+    # Hold out my own games. my_games.py caches them into the same data/raw/, so
+    # without this they would leak into training and M6 would be scoring the
+    # model on games it had already memorised.
+    holdout_path = config.DATA_PROCESSED / "my_match_ids.txt"
+    n_holdout = 0
+    if holdout_path.exists():
+        mine = set(holdout_path.read_text(encoding="utf-8").split())
+        n_holdout = int(df["matchId"].isin(mine).sum())
+        df = df[~df["matchId"].isin(mine)].reset_index(drop=True)
+
     kept = df[df["patch"].isin(config.TARGET_PATCHES)].reset_index(drop=True)
 
     print(f"Parsed {len(files)} files: {before} valid, {skipped} skipped (non-420/malformed).")
-    print(f"Deduped: {before - len(df)} removed. Patch filter {config.TARGET_PATCHES}: "
-          f"{len(kept)}/{len(df)} kept.")
+    if n_holdout:
+        print(f"Held out {n_holdout} of my own games (never trained on -- see my_games.py).")
+    print(f"Patch filter {config.TARGET_PATCHES}: {len(kept)}/{len(df)} kept.")
     return kept
 
 
@@ -98,6 +121,10 @@ def main() -> None:
     print(f"\nSaved {out.relative_to(config.ROOT)}  shape={df.shape}")
     print(f"win balance (blue win rate): {df['win'].mean():.1%}")
     print(f"unique matchIds: {df['matchId'].nunique()} (dupes: {len(df) - df['matchId'].nunique()})")
+    print(f"seed tiers: {df['seed_tier'].value_counts().to_dict()}")
+    if df["gameCreation"].notna().any():
+        span = pd.to_datetime(df["gameCreation"], unit="ms")
+        print(f"games played between {span.min():%Y-%m-%d} and {span.max():%Y-%m-%d}")
     with pd.option_context("display.max_columns", None, "display.width", 200):
         print("\nhead:")
         print(df[["matchId", "patch", "win", "blue1", "blue2", "blue3", "blue4", "blue5",

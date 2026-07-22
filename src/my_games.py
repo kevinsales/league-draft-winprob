@@ -71,6 +71,14 @@ def main(count: int) -> None:
     ids = my_match_ids(puuid, count)
     print(f"{config.MY_RIOT_ID}: {len(ids)} recent ranked-solo games\n")
 
+    # Record my match ids so parse.py can KEEP THEM OUT of the training set.
+    # These games get cached into the same data/raw/ as everything else, so
+    # without this the model would train on the very games it is judged against.
+    config.DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
+    holdout = config.DATA_PROCESSED / "my_match_ids.txt"
+    known = set(holdout.read_text(encoding="utf-8").split()) if holdout.exists() else set()
+    holdout.write_text("\n".join(sorted(known | set(ids))), encoding="utf-8")
+
     config.DATA_RAW.mkdir(parents=True, exist_ok=True)
     for mid in ids:
         if ingest.fetch_match(mid):

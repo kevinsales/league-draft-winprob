@@ -42,6 +42,11 @@ MATCH_REGION = "sea"
 # global, so we try the nearest first and fall back.
 ACCOUNT_REGIONS = ["asia", "americas", "europe"]
 
+# Human-readable provenance, shown on figures / the predictor page / the README
+# so nobody has to guess where the numbers came from.
+REGION_LABEL = "SEA (South-East Asia)"
+PLATFORM_LABEL = "sg2 - Singapore"
+
 # --- Queue & patch ---
 RANKED_SOLO_QUEUE_ID = 420        # match-v5 queue filter
 RANKED_SOLO = "RANKED_SOLO_5x5"   # league-v4 queue name
