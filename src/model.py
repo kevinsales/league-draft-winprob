@@ -43,7 +43,8 @@ RANDOM_STATE = 42
 
 # Plain-English names for anything a reader sees on a chart.
 FRIENDLY = {
-    "logreg  Tier-1 (M4)": "our model (champions)",
+    "logreg  Tier-2": "our model (team shape)",
+    "logreg  Tier-1 (M4)": "champion-only model",
     "LightGBM Tier-2 (M5)": "fancier model (did worse)",
 }
 
@@ -195,7 +196,7 @@ def plot_champion_coefficients(X: pd.DataFrame, y: pd.Series, labels: pd.DataFra
     ax.set_xlabel("shifts the game toward the blue team (percentage points)")
     ax.xaxis.set_major_formatter(lambda v, _: f"{v:+.1f}")
     viz.title_block(ax, "Which champions actually change your odds?",
-                    f"The {k} biggest movers each way, across 1,679 Master games.")
+                    f"The {k} biggest movers each way, across {len(X):,} apex ranked games.")
     viz.caption(ax, "A bar to the right means the blue team wins more often when that "
                     "happens; a bar to the left means the red team does. Either way, read "
                     "the scale: the biggest mover on this chart is worth under 2 games in "
@@ -253,21 +254,22 @@ def main() -> None:
     print("=== MODEL COMPARISON (out-of-fold, identical folds) ===")
     print(table.to_string(float_format=lambda v: f"{v:.4f}"))
 
-    # ---- figures
-    viz.apply_style()
-    config.FIGURES.mkdir(parents=True, exist_ok=True)
-    plot_calibration(yv, {k: oof[k] for k in ["logreg  Tier-1 (M4)", "LightGBM Tier-2 (M5)"]},
-                     config.FIGURES / "calibration_baseline.png")
-    # LightGBM is still fitted (it may win and get saved) but we no longer plot its
-    # importances -- it scored below chance, so that ranking was noise.
-    lgbm_full = make_lgbm()
-    lgbm_full.fit(X2, y)
-    plot_champion_coefficients(X1, y, labels, config.FIGURES / "champion_effects.png")
-
     # Pick the best *trained* model (baselines aren't models we can ship).
     TRAINED = ["logreg  Tier-1 (M4)", "logreg  Tier-2", "LightGBM Tier-2 (M5)"]
     best_name = min(TRAINED, key=lambda n: metrics(yv, oof[n])["log_loss"])
     best_probs = oof[best_name]
+
+    # ---- figures
+    viz.apply_style()
+    config.FIGURES.mkdir(parents=True, exist_ok=True)
+    # Calibration of the best model against the gradient-boosted one.
+    plot_calibration(yv, {k: oof[k] for k in [best_name, "LightGBM Tier-2 (M5)"]},
+                     config.FIGURES / "calibration_baseline.png")
+    lgbm_full = make_lgbm()
+    lgbm_full.fit(X2, y)
+    # Champion effects always come from a Tier-1 fit -- this figure is the
+    # per-champion view regardless of which model wins on metrics.
+    plot_champion_coefficients(X1, y, labels, config.FIGURES / "champion_effects.png")
 
     plot_winprob_spread(best_probs, config.FIGURES / "winprob_spread.png")
     print(f"\nFigures -> reports/figures/: calibration_baseline.png, "
@@ -284,6 +286,16 @@ def main() -> None:
     joblib.dump({"model": final, "columns": cols, "tier": tier},
                 config.DATA_PROCESSED / "model.joblib")
     print(f"Saved best model ('{best_name.strip()}', {tier}) -> data/processed/model.joblib")
+
+    # Also ship a Tier-1 CHAMPION model for the interactive predictor + scorecard.
+    # Per-champion effects need champion columns, so those tools always use this
+    # model even when the archetype (Tier-2) model wins on metrics. It scores
+    # within a hair of the best -- the metric cost of the champion-level view is
+    # tiny and the interpretability is worth it for a demo.
+    champ = make_logreg().fit(X1, y)
+    joblib.dump({"model": champ, "columns": list(X1.columns), "tier": "tier1"},
+                config.DATA_PROCESSED / "model_champions.joblib")
+    print("Saved champion-level model (interactive demo) -> model_champions.joblib")
 
     # ---- persist results so the notebooks and the HTML report can read them
     #      without re-running the (slow) nested cross-validation.

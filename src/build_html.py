@@ -29,8 +29,14 @@ import features as F  # noqa: E402
 
 
 def export_model() -> dict:
-    """Pull the linear model apart into a JSON-friendly dict."""
-    bundle = joblib.load(config.DATA_PROCESSED / "model.joblib")
+    """Pull the linear CHAMPION model apart into a JSON-friendly dict.
+
+    Uses model_champions.joblib (Tier-1), not the best model: the interactive
+    predictor is the per-champion view, which needs champion coefficients. The
+    archetype model scores marginally higher -- see the report for the full
+    comparison.
+    """
+    bundle = joblib.load(config.DATA_PROCESSED / "model_champions.joblib")
     model, columns = bundle["model"], bundle["columns"]
     est = getattr(model, "best_estimator_", model)
     coef = pd.Series(est.coef_[0], index=columns)
@@ -217,8 +223,9 @@ HTML = r"""<meta charset="utf-8">
   games in a hundred &mdash; and that the total almost never leaves the 40&ndash;60% band.
   That is the finding: <b>the draft barely decides a solo-queue game.</b> What you do
   after champion select matters far more.</p>
-  <p class="foot">Model: regularised logistic regression on champion picks and bans.
-  Not endorsed by Riot Games.</p>
+  <p class="foot">This is the champion-level model (logistic regression on picks and bans), used
+  here so each pick's effect can be shown. A team-archetype model scores a hair higher &mdash; see
+  the findings report. Not endorsed by Riot Games.</p>
 </div>
 
 <script>

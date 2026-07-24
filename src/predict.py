@@ -44,9 +44,14 @@ def resolve_champion(raw: str, labels: pd.DataFrame) -> int:
     raise SystemExit(f"Unknown champion '{raw}'. Did you mean: {', '.join(options) or '???'}")
 
 
+# The interactive/CLI predictor is the per-champion view, so it uses the Tier-1
+# champion model. The archetype model scores marginally higher (see the report).
+CHAMPION_MODEL = "model_champions.joblib"
+
+
 def predict_draft(blue: list[str], red: list[str], bans: list[str] = ()) -> float:
     """10 champion names (+ optional bans) -> P(blue side wins)."""
-    bundle = joblib.load(config.DATA_PROCESSED / "model.joblib")
+    bundle = joblib.load(config.DATA_PROCESSED / CHAMPION_MODEL)
     model, columns, tier = bundle["model"], bundle["columns"], bundle["tier"]
     labels = F.load_labels()
 
@@ -83,7 +88,7 @@ def contributions(blue: list[str], red: list[str], bans: list[str] = ()) -> pd.D
     intercept plus each active feature's coefficient, so a draft's probability
     decomposes exactly into 'what each pick contributed'.
     """
-    bundle = joblib.load(config.DATA_PROCESSED / "model.joblib")
+    bundle = joblib.load(config.DATA_PROCESSED / CHAMPION_MODEL)
     model, columns = bundle["model"], bundle["columns"]
     est = getattr(model, "best_estimator_", model)
     if not hasattr(est, "coef_"):
@@ -167,7 +172,7 @@ def plot_scorecard(blue, red, bans, prob: float, contrib: pd.DataFrame):
 
     fig.text(0.05, 0.945, "Draft win-probability scorecard", fontsize=15,
              fontweight="semibold", color=viz.INK)
-    fig.text(0.05, 0.905, f"Master SEA, patches {' + '.join(config.TARGET_PATCHES)}  -  "
+    fig.text(0.05, 0.905, f"apex SEA, patches {' + '.join(config.TARGET_PATCHES)}  -  "
              "champion select rarely moves a solo-queue game far from a coin flip.",
              fontsize=9.5, color=viz.INK_SECONDARY)
     return viz.save(fig, "draft_scorecard.png")
@@ -190,7 +195,7 @@ def main() -> None:
 
     print(f"\n  Blue side win probability: {prob:.1%}")
     print(f"  Red  side win probability: {1 - prob:.1%}")
-    print("\n  (Trained on Master SEA, patches "
+    print("\n  (Trained on apex SEA, patches "
           f"{' + '.join(config.TARGET_PATCHES)}. Honest reminder: draft alone "
           "rarely moves a solo-queue game far from a coin flip.)")
 

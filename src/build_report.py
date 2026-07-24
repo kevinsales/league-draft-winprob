@@ -22,9 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 
 FRIENDLY_ROWS = {
-    "logreg  Tier-1 (M4)": "Our model (champion picks + bans)",
-    "logreg  Tier-2": "Same model, archetype features",
-    "LightGBM Tier-2 (M5)": "Fancier model (gradient boosting)",
+    "logreg  Tier-2": "Team-composition model",
+    "logreg  Tier-1 (M4)": "Champion-identity model",
+    "LightGBM Tier-2 (M5)": "Gradient boosting",
     "naive champ-WR": "Naive champion win-rate rule",
     "coin flip (0.5)": "Coin flip",
     "base rate (const)": "Always predict the base rate",
@@ -216,10 +216,10 @@ because the draft never justifies confidence.</p>
 __FIG_SPREAD__
 
 <h2>Which champions move the needle?</h2>
-<p>Because the model is a plain logistic regression, each champion's effect can be read off
-directly and converted into percentage points of win chance. The champions below are the
-most extreme in the entire dataset &mdash; and the strongest of them shifts the game by less
-than <b>two games in a hundred</b>.</p>
+<p>A logistic regression on champion picks lets each champion's effect be read off directly and
+converted into percentage points of win chance. The champions below are the most extreme in the
+entire dataset &mdash; and the strongest of them shifts the game by less than <b>two games in a
+hundred</b>.</p>
 
 __FIG_EFFECTS__
 
@@ -232,10 +232,12 @@ no model ever saw the games it is judged on.</p>
 __TABLE__
 
 <p>Two results worth stating plainly. First, the <b>gradient-boosted model lost</b> to plain
-logistic regression; aggregating five champions into archetype counts throws away champion
-identity, which is where the little signal there is actually lives. Second, <b>regularisation
-mattered more than model choice</b> &mdash; an earlier version with a hand-picked penalty was
-beaten by a coin flip, not because it was wrong on average but because it was overconfident.</p>
+logistic regression &mdash; the extra complexity found no signal to exploit. Second, among the
+linear models the <b>archetype representation</b> (team shape: engage, hard CC, frontline, AD/AP
+balance) edged raw <b>champion identity</b>: with enough games, <em>what kind of team you built</em>
+carries slightly more signal than <em>which exact champions</em> are on it. And regularisation
+mattered more than model choice &mdash; an earlier hand-picked penalty was beaten by a coin flip,
+overconfident rather than wrong on average.</p>
 
 __FIG_CALIB__
 
