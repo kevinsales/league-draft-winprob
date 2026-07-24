@@ -16,6 +16,7 @@ Outputs: a model-comparison table, calibration + feature-importance + win-prob
 spread figures in reports/figures/, and the fitted model saved for predict.py.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -284,6 +285,13 @@ def main() -> None:
                 config.DATA_PROCESSED / "model.joblib")
     print(f"Saved best model ('{best_name.strip()}', {tier}) -> data/processed/model.joblib")
 
+    # ---- persist results so the notebooks and the HTML report can read them
+    #      without re-running the (slow) nested cross-validation.
+    table.to_csv(config.DATA_PROCESSED / "model_comparison.csv")
+    pd.DataFrame({"matchId": df["matchId"], "win": yv,
+                  **{k: v for k, v in oof.items()}}).to_csv(
+        config.DATA_PROCESSED / "oof_predictions.csv", index=False)
+
     # ---- headline analysis
     m = metrics(yv, best_probs)
     majority = max(yv.mean(), 1 - yv.mean())  # accuracy of always guessing the common side
@@ -297,6 +305,28 @@ def main() -> None:
           f"(std {best_probs.std():.3f}) -- draft rarely moves us far from even odds.")
     print("\n  Read: champion select alone gets us only a few points above chance.")
     print("  The draft is not what decides a solo-queue game -- execution is.")
+
+    headline = {
+        "best_model": best_name.strip(),
+        "games": int(len(df)),
+        "patches": config.TARGET_PATCHES,
+        "region": config.REGION_LABEL,
+        "platform": config.PLATFORM_LABEL,
+        "tiers": (df["seed_tier"].value_counts().to_dict()
+                  if "seed_tier" in df.columns else {}),
+        "blue_win_rate": float(y.mean()),
+        "roc_auc": m["roc_auc"], "log_loss": m["log_loss"],
+        "brier": m["brier"], "accuracy": m["accuracy"],
+        "majority_accuracy": float(majority),
+        "prob_min": float(best_probs.min()), "prob_max": float(best_probs.max()),
+        "prob_std": float(best_probs.std()),
+        "baseline_log_loss": metrics(yv, oof["coin flip (0.5)"])["log_loss"],
+        "constant_log_loss": metrics(yv, oof["base rate (const)"])["log_loss"],
+    }
+    (config.DATA_PROCESSED / "headline.json").write_text(
+        json.dumps(headline, indent=2), encoding="utf-8")
+    print(f"\nSaved model_comparison.csv, oof_predictions.csv, headline.json "
+          f"-> {config.DATA_PROCESSED.relative_to(config.ROOT)}/")
 
 
 if __name__ == "__main__":

@@ -114,7 +114,12 @@ def fetch_match(match_id: str) -> bool:
     url = config.regional_host(config.MATCH_REGION) + f"/lol/match/v5/matches/{match_id}"
     resp = get(url)
     resp.raise_for_status()
-    path.write_text(json.dumps(resp.json()), encoding="utf-8")
+    # Write to a temp file then rename: os.replace is atomic, so killing the
+    # process (or shutting the machine down) mid-pull can never leave a
+    # half-written .json behind for the parser to choke on.
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(resp.json()), encoding="utf-8")
+    tmp.replace(path)
     return True
 
 
@@ -129,12 +134,26 @@ def save_seed_tiers(match_tier: dict[str, str]) -> None:
                 mid, tier = line.split(",", 1)
                 merged.setdefault(mid, tier)
     lines = ["matchId,seed_tier"] + [f"{m},{t}" for m, t in sorted(merged.items())]
-    path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"  seed-tier manifest: {len(merged)} matches -> {path.name}")
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("\n".join(lines), encoding="utf-8")
+    tmp.replace(path)  # atomic: an interrupted run can never corrupt the manifest
+
+
+def load_seed_tiers() -> dict[str, str]:
+    """Read the matchId -> seed tier manifest written by a previous run."""
+    path = config.DATA_PROCESSED / "seed_tiers.csv"
+    out: dict[str, str] = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines()[1:]:
+            if "," in line:
+                mid, tier = line.split(",", 1)
+                out[mid] = tier
+    return out
 
 
 def ingest(seeds_per_tier: dict[str, int] | None = None, ids_per_seed: int = 60,
-           target_matches: int = 12000, shuffle_seed: int = 42) -> None:
+           target_matches: int = 12000, shuffle_seed: int = 42,
+           reuse_ids: bool = False) -> None:
     config.DATA_RAW.mkdir(parents=True, exist_ok=True)
     seeds_per_tier = seeds_per_tier or DEFAULT_SEEDS_PER_TIER
 
@@ -142,22 +161,30 @@ def ingest(seeds_per_tier: dict[str, int] | None = None, ids_per_seed: int = 60,
     #    games). Each match is tagged with the tier of the FIRST seed that
     #    surfaced it. NOTE: match-v5 has no "game tier" field, so this is an
     #    approximation -- an apex game contains a spread of nearby ranks.
-    print("Seeding from apex tiers:")
-    seeds = get_apex_puuids(seeds_per_tier)
-    match_tier: dict[str, str] = {}
-    for i, (puuid, tier) in enumerate(seeds, 1):
-        time.sleep(REQUEST_SPACING)
-        for m in get_match_ids(puuid, ids_per_seed):
-            match_tier.setdefault(m, tier)
-        if i % 50 == 0 or i == len(seeds):
-            print(f"  seed {i}/{len(seeds)} ({tier}) -> {len(match_tier)} unique ids so far")
+    #
+    #    This phase costs ~1 API call per seed, so it is checkpointed as it goes
+    #    and can be skipped entirely on a resume with --reuse-ids.
+    match_tier: dict[str, str] = load_seed_tiers()
+    if reuse_ids and match_tier:
+        print(f"Reusing {len(match_tier)} match ids from the saved manifest "
+              "(skipping the seed-collection phase).")
+    else:
+        print("Seeding from apex tiers:")
+        seeds = get_apex_puuids(seeds_per_tier)
+        for i, (puuid, tier) in enumerate(seeds, 1):
+            time.sleep(REQUEST_SPACING)
+            for m in get_match_ids(puuid, ids_per_seed):
+                match_tier.setdefault(m, tier)
+            if i % 50 == 0 or i == len(seeds):
+                print(f"  seed {i}/{len(seeds)} ({tier}) -> {len(match_tier)} unique ids so far")
+                save_seed_tiers(match_tier)  # checkpoint: survive an interruption
 
     # Shuffle before slicing: the seed list is ordered by tier, so taking the
     # first N unsliced would return only Challenger games.
     match_ids = list(match_tier)
     random.Random(shuffle_seed).shuffle(match_ids)
     match_ids = match_ids[:target_matches]
-    save_seed_tiers({m: match_tier[m] for m in match_ids})
+    save_seed_tiers(match_tier)
     print(f"\nFetching up to {len(match_ids)} unique matches...")
 
     # 2) Fetch match objects, caching to data/raw/. Skip anything already on disk.
@@ -185,7 +212,10 @@ if __name__ == "__main__":
     p.add_argument("--challenger", type=int, default=300, help="Challenger seed players")
     p.add_argument("--ids-per-seed", type=int, default=60, help="recent match ids per seed")
     p.add_argument("--target", type=int, default=12000, help="max unique matches to fetch")
+    p.add_argument("--reuse-ids", action="store_true",
+                   help="skip the seed phase and reuse the saved id manifest (fast resume)")
     a = p.parse_args()
     ingest(seeds_per_tier={"MASTER": a.master, "GRANDMASTER": a.grandmaster,
                            "CHALLENGER": a.challenger},
-           ids_per_seed=a.ids_per_seed, target_matches=a.target)
+           ids_per_seed=a.ids_per_seed, target_matches=a.target,
+           reuse_ids=a.reuse_ids)

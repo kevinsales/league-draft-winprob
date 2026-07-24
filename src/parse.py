@@ -32,7 +32,13 @@ def parse_match(path: Path) -> dict | None:
     Champions are kept in participant order (roughly role order); side identity
     is what matters for the model, not the slot index.
     """
-    info = json.loads(path.read_text(encoding="utf-8"))["info"]
+    try:
+        info = json.loads(path.read_text(encoding="utf-8"))["info"]
+    except (json.JSONDecodeError, KeyError, UnicodeDecodeError):
+        # A file truncated by a hard shutdown. ingest.py writes atomically so this
+        # should not happen, but one bad file must not kill a 10k-match parse --
+        # delete it and it will be re-fetched on the next ingest run.
+        return None
     if info.get("queueId") != config.RANKED_SOLO_QUEUE_ID:
         return None
 
